@@ -5,10 +5,17 @@ import random, math,time
 
 WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 800
-
+time_of_day = 0.0
+ambient_light = 1.0
 # ---------------- camera ----------------
 cam_x, cam_z = 0.0, 15.0     # camera position (free-roam, GTA style)
 cam_angle = 0.0              # left/right turn angle in degrees
+
+# ---------------- Rain System ----------------
+RAIN_COUNT = 1000
+raindrops = []
+is_raining = False
+last_rain_toggle = time.time()
 
 car_speed = 0.0
 max_speed = 40.0         # Top forward speed (units/sec)
@@ -16,6 +23,8 @@ max_reverse_speed = -15.0 # Top reverse speed (units/sec)
 acceleration = 30.0      # How fast speed builds up (units/sec^2)
 deceleration = 10.0      # Coasting friction when no key is held
 steering_speed = 50.0    # Turn rate (degrees/sec)
+
+INTERSECTION_INTERVAL = 4  # Road intersections every 4 blocks
 
 # Input tracking
 key_states = {'w': False, 's': False, 'a': False, 'd': False}
@@ -26,7 +35,7 @@ last_frame_time = time.time()
 # grid streams in every direction forever as the car drives around.
 ROAD_WIDTH = 20.0
 FOOTPATH_WIDTH = 4.0
-CELL_SIZE = 150                # distance between two road centerlines
+CELL_SIZE = 150               # distance between two road centerlines
 BLOCK_MARGIN = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH   # gap before buildable land starts
 
 
@@ -53,14 +62,20 @@ BUILDING_COLORS = [
 def camera_block(cx, cz):
     return int(math.floor(cx / CELL_SIZE)), int(math.floor(cz / CELL_SIZE))
 
+def set_env_color(r, g, b):
+    """Sets glColor3f scaled by current atmospheric lighting."""
+    glColor3f(r * ambient_light, g * ambient_light, b * ambient_light)
 
 def generate_block(bi, bj):
     """Deterministically build the contents of a single city block.
     Same (bi, bj) always produces the same block, so the world is stable
     even though it is generated on the fly, chunk by chunk."""
-
+    global INTERSECTION_INTERVAL
     seed = (bi * 73856093) ^ (bj * 19349663) ^ 0x9E3779B9
     rnd = random.Random(seed)
+
+    # Allow buildings and trees to occupy blocks between roads
+    margin = 2.0
 
     bx0 = bi * CELL_SIZE + BLOCK_MARGIN
     bx1 = (bi + 1) * CELL_SIZE - BLOCK_MARGIN
@@ -133,12 +148,21 @@ def generate_block(bi, bj):
         street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath (arm points forward toward road)
         street_lamps.append((x_pos, fz1, 180))  # Top side footpath (arm points backward toward road)
         x_pos += LAMP_SPACING
-    traffic_lights = [
-        (fx0 + 2, fz0 + 2, 270),
-        (fx1 - 2, fz0 + 2, 180),
-        (fx0 + 2, fz1 - 2, 0),
-        (fx1 - 2, fz1 - 2, 90)
-    ]
+
+    # Only generate traffic lights at true road intersections
+    if bi % INTERSECTION_INTERVAL == 0 and bj % INTERSECTION_INTERVAL == 0:
+        x = bi * CELL_SIZE
+        z = bj * CELL_SIZE
+        offset = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0  # Offset to corner of curb
+
+        traffic_lights = [
+            (x - offset, z - offset, 90),  # SW Corner facing East
+            (x + offset, z - offset, 0),  # SE Corner facing North
+            (x + offset, z + offset, 270),  # NE Corner facing West
+            (x - offset, z + offset, 180)  # NW Corner facing South
+        ]
+    else:
+        traffic_lights = []
 
     return {"trees": trees, "buildings": buildings, "lamps": lamps,"street_lamps": street_lamps,"traffic_lights": traffic_lights}
 
@@ -162,32 +186,24 @@ def stream_world(cx, cz):
     return ci, cj
 
 
+def update_time(value):
+    global time_of_day
 
+    time_of_day += 0.0005
 
-def stream_world(cx, cz):
-    """Make sure every block within VIEW_RADIUS of the camera exists,
-    and forget blocks that are far behind us (classic open-world streaming)."""
+    if time_of_day >= 1.0:
+        time_of_day = 0.0
 
-    ci, cj = camera_block(cx, cz)
+    glutPostRedisplay()
+    glutTimerFunc(16, update_time, 0)
 
-    for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
-        for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
-            if (bi, bj) not in block_cache:
-                block_cache[(bi, bj)] = generate_block(bi, bj)
-
-    stale = [key for key in block_cache
-             if abs(key[0] - ci) > PRUNE_MARGIN or abs(key[1] - cj) > PRUNE_MARGIN]
-    for key in stale:
-        del block_cache[key]
-
-    return ci, cj
 
 
 # ---------------- ground / road / footpaths ----------------
 
 def draw_ground(cx, cz):
     size = CELL_SIZE * (VIEW_RADIUS + 3)
-    glColor3f(0.30, 0.55, 0.25)  # grass green
+    set_env_color(0.30, 0.55, 0.25)
     glBegin(GL_QUADS)
     glVertex3f(cx - size, 0, cz + size)
     glVertex3f(cx + size, 0, cz + size)
@@ -197,27 +213,31 @@ def draw_ground(cx, cz):
 
 
 def draw_footpaths(ci, cj):
+    global INTERSECTION_INTERVAL
     half = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH
     lo = -(VIEW_RADIUS + 1) * CELL_SIZE
     hi = (VIEW_RADIUS + 1) * CELL_SIZE
 
-    glColor3f(0.45, 0.45, 0.45)
+    set_env_color(0.45, 0.45, 0.45)
+
     for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
-        x = i * CELL_SIZE
-        glBegin(GL_QUADS)
-        glVertex3f(x - half, 0.015, cj * CELL_SIZE + hi)
-        glVertex3f(x + half, 0.015, cj * CELL_SIZE + hi)
-        glVertex3f(x + half, 0.015, cj * CELL_SIZE + lo)
-        glVertex3f(x - half, 0.015, cj * CELL_SIZE + lo)
-        glEnd()
+        if i % INTERSECTION_INTERVAL == 0:
+            x = i * CELL_SIZE
+            glBegin(GL_QUADS)
+            glVertex3f(x - half, 0.015, cj * CELL_SIZE + hi)
+            glVertex3f(x + half, 0.015, cj * CELL_SIZE + hi)
+            glVertex3f(x + half, 0.015, cj * CELL_SIZE + lo)
+            glVertex3f(x - half, 0.015, cj * CELL_SIZE + lo)
+            glEnd()
     for j in range(cj - VIEW_RADIUS - 1, cj + VIEW_RADIUS + 2):
-        z = j * CELL_SIZE
-        glBegin(GL_QUADS)
-        glVertex3f(ci * CELL_SIZE + lo, 0.016, z - half)
-        glVertex3f(ci * CELL_SIZE + hi, 0.016, z - half)
-        glVertex3f(ci * CELL_SIZE + hi, 0.016, z + half)
-        glVertex3f(ci * CELL_SIZE + lo, 0.016, z + half)
-        glEnd()
+        if j % INTERSECTION_INTERVAL == 0:
+            z = j * CELL_SIZE
+            glBegin(GL_QUADS)
+            glVertex3f(ci * CELL_SIZE + lo, 0.016, z - half)
+            glVertex3f(ci * CELL_SIZE + hi, 0.016, z - half)
+            glVertex3f(ci * CELL_SIZE + hi, 0.016, z + half)
+            glVertex3f(ci * CELL_SIZE + lo, 0.016, z + half)
+            glEnd()
 
 
 def draw_roads(ci, cj):
@@ -228,23 +248,25 @@ def draw_roads(ci, cj):
     # asphalt strips: every road running north-south (varying x) and
     # every road running east-west (varying z) -- together they form a
     # full grid of 4-way intersections, i.e. turns everywhere you look.
-    glColor3f(0.15, 0.15, 0.15)
+    set_env_color(0.15, 0.15, 0.15)
     for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
-        x = i * CELL_SIZE
-        glBegin(GL_QUADS)
-        glVertex3f(x - half, 0.02, cj * CELL_SIZE + hi)
-        glVertex3f(x + half, 0.02, cj * CELL_SIZE + hi)
-        glVertex3f(x + half, 0.02, cj * CELL_SIZE + lo)
-        glVertex3f(x - half, 0.02, cj * CELL_SIZE + lo)
-        glEnd()
+        if i % INTERSECTION_INTERVAL == 0:
+            x = i * CELL_SIZE
+            glBegin(GL_QUADS)
+            glVertex3f(x - half, 0.02, cj * CELL_SIZE + hi)
+            glVertex3f(x + half, 0.02, cj * CELL_SIZE + hi)
+            glVertex3f(x + half, 0.02, cj * CELL_SIZE + lo)
+            glVertex3f(x - half, 0.02, cj * CELL_SIZE + lo)
+            glEnd()
     for j in range(cj - VIEW_RADIUS - 1, cj + VIEW_RADIUS + 2):
-        z = j * CELL_SIZE
-        glBegin(GL_QUADS)
-        glVertex3f(ci * CELL_SIZE + lo, 0.021, z - half)
-        glVertex3f(ci * CELL_SIZE + hi, 0.021, z - half)
-        glVertex3f(ci * CELL_SIZE + hi, 0.021, z + half)
-        glVertex3f(ci * CELL_SIZE + lo, 0.021, z + half)
-        glEnd()
+        if j % INTERSECTION_INTERVAL == 0:
+            z = j * CELL_SIZE
+            glBegin(GL_QUADS)
+            glVertex3f(ci * CELL_SIZE + lo, 0.021, z - half)
+            glVertex3f(ci * CELL_SIZE + hi, 0.021, z - half)
+            glVertex3f(ci * CELL_SIZE + hi, 0.021, z + half)
+            glVertex3f(ci * CELL_SIZE + lo, 0.021, z + half)
+            glEnd()
 
     draw_lane_markings(ci, cj)
     draw_intersections(ci, cj)
@@ -259,45 +281,49 @@ def draw_lane_markings(ci, cj):
     # dashed centre line along every north-south road
     glColor3f(1.0, 1.0, 1.0)
     for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
-        x = i * CELL_SIZE
-        z = math.floor((cj * CELL_SIZE + hi) / step) * step
-        z_end = cj * CELL_SIZE + lo
-        while z > z_end:
-            glBegin(GL_QUADS)
-            glVertex3f(x - 0.15, 0.025, z)
-            glVertex3f(x + 0.15, 0.025, z)
-            glVertex3f(x + 0.15, 0.025, z - dash_len)
-            glVertex3f(x - 0.15, 0.025, z - dash_len)
-            glEnd()
-            z -= step
+        if i % INTERSECTION_INTERVAL == 0:
+            x = i * CELL_SIZE
+            z = math.floor((cj * CELL_SIZE + hi) / step) * step
+            z_end = cj * CELL_SIZE + lo
+            while z > z_end:
+                glBegin(GL_QUADS)
+                glVertex3f(x - 0.15, 0.025, z)
+                glVertex3f(x + 0.15, 0.025, z)
+                glVertex3f(x + 0.15, 0.025, z - dash_len)
+                glVertex3f(x - 0.15, 0.025, z - dash_len)
+                glEnd()
+                z -= step
 
     # dashed centre line along every east-west road
     for j in range(cj - VIEW_RADIUS - 1, cj + VIEW_RADIUS + 2):
-        z = j * CELL_SIZE
-        x = math.floor((ci * CELL_SIZE + hi) / step) * step
-        x_end = ci * CELL_SIZE + lo
-        while x > x_end:
-            glBegin(GL_QUADS)
-            glVertex3f(x, 0.026, z - 0.15)
-            glVertex3f(x - dash_len, 0.026, z - 0.15)
-            glVertex3f(x - dash_len, 0.026, z + 0.15)
-            glVertex3f(x, 0.026, z + 0.15)
-            glEnd()
-            x -= step
+        if j % INTERSECTION_INTERVAL == 0:
+            z = j * CELL_SIZE
+            x = math.floor((ci * CELL_SIZE + hi) / step) * step
+            x_end = ci * CELL_SIZE + lo
+            while x > x_end:
+                glBegin(GL_QUADS)
+                glVertex3f(x, 0.026, z - 0.15)
+                glVertex3f(x - dash_len, 0.026, z - 0.15)
+                glVertex3f(x - dash_len, 0.026, z + 0.15)
+                glVertex3f(x, 0.026, z + 0.15)
+                glEnd()
+                x -= step
 
     # yellow kerb/edge lines running the length of every road
     glColor3f(0.95, 0.85, 0.2)
     half = ROAD_WIDTH / 2.0 - 0.15
     for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
-        x = i * CELL_SIZE
-        for side in (-1, 1):
-            ex = x + side * half
-            glBegin(GL_QUADS)
-            glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + hi)
-            glVertex3f(ex + 0.1, 0.022, cj * CELL_SIZE + hi)
-            glVertex3f(ex + 0.1, 0.022, cj * CELL_SIZE + lo)
-            glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + lo)
-            glEnd()
+        if i % INTERSECTION_INTERVAL == 0:
+            x = i * CELL_SIZE
+            for side in (-1, 1):
+                ex = x + side * half
+                glBegin(GL_QUADS)
+                glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + hi)
+                glVertex3f(ex + 0.1, 0.022, cj * CELL_SIZE + hi)
+                glVertex3f(ex + 0.1, 0.022, cj * CELL_SIZE + lo)
+                glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + lo)
+                glEnd()
+
 
 
 def draw_intersections(ci, cj):
@@ -310,7 +336,11 @@ def draw_intersections(ci, cj):
 
     glColor3f(0.95, 0.95, 0.9)
     for i in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
+        if i % INTERSECTION_INTERVAL != 0:
+            continue
         for j in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
+            if j % INTERSECTION_INTERVAL != 0:
+                continue
             x, z = i * CELL_SIZE, j * CELL_SIZE
             for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 cx = x + dx * inset
@@ -353,7 +383,7 @@ def draw_tree(x, z, height, kind):
     glPushMatrix()
     glTranslatef(x, 0, z)
 
-    glColor3f(0.45, 0.28, 0.13)
+    set_env_color(0.45, 0.28, 0.13)
     quad = gluNewQuadric()
     glPushMatrix()
     glRotatef(-90, 1, 0, 0)
@@ -361,7 +391,7 @@ def draw_tree(x, z, height, kind):
     glPopMatrix()
 
     if kind == 'pine':
-        glColor3f(0.08, 0.4, 0.18)
+        set_env_color(0.08, 0.4, 0.18)
         for i, scale in enumerate((1.0, 0.7, 0.42)):
             glPushMatrix()
             glTranslatef(0, height * 0.5 + i * height * 0.28, 0)
@@ -369,7 +399,7 @@ def draw_tree(x, z, height, kind):
             gluCylinder(quad, height * 0.32 * scale, 0.0, height * 0.4, 10, 1)
             glPopMatrix()
     else:
-        glColor3f(0.1, 0.5, 0.15)
+        set_env_color(0.1, 0.5, 0.15)
         glPushMatrix()
         glTranslatef(0, height * 0.5, 0)
         glRotatef(-90, 1, 0, 0)
@@ -412,7 +442,7 @@ def draw_building(x, z, w, d, h, color, win_seed):
     glTranslatef(x, 0, z)
     hw, hd = w / 2.0, d / 2.0
 
-    glColor3f(*color)
+    set_env_color(*color)
     glBegin(GL_QUADS)
     glVertex3f(-hw, 0, hd); glVertex3f(hw, 0, hd); glVertex3f(hw, h, hd); glVertex3f(-hw, h, hd)
     glVertex3f(hw, 0, -hd); glVertex3f(-hw, 0, -hd); glVertex3f(-hw, h, -hd); glVertex3f(hw, h, -hd)
@@ -421,7 +451,7 @@ def draw_building(x, z, w, d, h, color, win_seed):
     glEnd()
 
     roof_color = tuple(min(1.0, c * 0.75) for c in color)
-    glColor3f(*roof_color)
+    set_env_color(*roof_color)
     glBegin(GL_QUADS)
     glVertex3f(-hw, h, -hd); glVertex3f(hw, h, -hd); glVertex3f(hw, h, hd); glVertex3f(-hw, h, hd)
     glEnd()
@@ -445,6 +475,32 @@ def draw_lamp(x, z):
     glColor3f(1.0, 0.95, 0.6)
     glutSolidSphere(0.25, 8, 8)
     glPopMatrix()
+
+
+def draw_lamp_glow(radius=10.0):
+    global ambient_light
+    night_factor = max(0.0, 1.0 - (ambient_light - 0.2) / 0.8)
+    if night_factor <= 0.01:
+        return
+
+    glDepthMask(GL_FALSE)
+    glBegin(GL_TRIANGLE_FAN)
+
+    # Bright warm center
+    glColor4f(1.0, 0.85, 0.3, 0.45 * night_factor)
+    glVertex3f(0.0, 0.03, 0.0)
+
+    # Soft edge falloff
+    glColor4f(1.0, 0.8, 0.2, 0.0)
+    segments = 16
+    for i in range(segments + 1):
+        angle = (2.0 * math.pi * i) / segments
+        gx = math.cos(angle) * radius
+        gz = math.sin(angle) * radius
+        glVertex3f(gx, 0.03, gz)
+
+    glEnd()
+    glDepthMask(GL_TRUE)
 
 
 def draw_Street_lamp(x, z, angle):
@@ -493,6 +549,16 @@ def draw_Street_lamp(x, z, angle):
 
     glPopMatrix()
     gluDeleteQuadric(quad)
+
+    # --- 4. GROUND LIGHT POOL (Local Coordinates) ---
+    # In unscaled local space, the arm projects 4.5 units along +X.
+    # We draw the pool directly on the road surface underneath the lamp head:
+    glPushMatrix()
+    glTranslatef(0, 0, -4.0)
+    draw_lamp_glow(radius=8.0)
+    glPopMatrix()
+
+
     glPopMatrix()
 
 
@@ -500,6 +566,7 @@ def draw_traffic_light(x, z,rotation, state):
     glPushMatrix()
     glTranslatef(x, 0, z)
     glRotatef(rotation, 0, 1, 0)
+    glScalef(2.5, 1.5, 2.5)
     # Pole
     glColor3f(0.15, 0.15, 0.15)
     glBegin(GL_QUADS)
@@ -554,6 +621,53 @@ def draw_traffic_light(x, z,rotation, state):
     glPopMatrix()
 
 
+def update_rain(dt):
+    global is_raining, last_rain_toggle
+
+    #toggle rain after random time
+    if time.time() - last_rain_toggle >= random.uniform(30,50):
+        is_raining = not is_raining
+        last_rain_toggle = time.time()
+
+    if not is_raining:
+        return
+
+    # Update particle positions and wrap them around the moving camera
+    for drop in raindrops:
+        drop[1] -= drop[3] * dt  # Fall vertically down
+
+        # Respawn drop at the top if it hits the ground
+        if drop[1] < 0:
+            drop[1] = random.uniform(40, 50)
+            drop[0] = cam_x + random.uniform(-80, 80)
+            drop[z_idx := 2] = cam_z + random.uniform(-80, 80)
+
+        # Keep rain box centered dynamically around the camera position
+        if abs(drop[0] - cam_x) > 80:
+            drop[0] = cam_x + random.uniform(-80, 80)
+        if abs(drop[2] - cam_z) > 80:
+            drop[2] = cam_z + random.uniform(-80, 80)
+
+
+def draw_rain():
+    if not is_raining:
+        return
+
+    glDepthMask(GL_FALSE)  # Disable depth writes for clean alpha blending
+    glLineWidth(1.2)
+
+    # Semi-transparent translucent light blue/white rain strands
+    glColor4f(0.7, 0.8, 0.95, 0.4)
+
+    glBegin(GL_LINES)
+    for x, y, z, speed, length in raindrops:
+        glVertex3f(x, y, z)
+        # Slight slant in movement to simulate realistic wind drop streak
+        glVertex3f(x - 0.1, y - length, z - 0.1)
+    glEnd()
+
+    glDepthMask(GL_TRUE)
+
 
 def draw_world(ci, cj):
     for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
@@ -573,13 +687,63 @@ def draw_world(ci, cj):
                 draw_traffic_light(x,z,rotation,get_traffic_states())
 
 
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def smoothstep(t):
+    # Smooth ease-in / ease-out curve
+    return t * t * (3 - 2 * t)
+
+
+def update_sky():
+    global time_of_day,ambient_light
+    colors = [
+        (0.60, 0.85, 0.9),  # DAY: Vibrant sky blue
+        (0.89, 0.59, 0.35),  # DUSK: Deep fiery orange/crimson
+        (0.01, 0.02, 0.06),  # NIGHT: Near black indigo
+        (0.3, 0.32, 0.5)  # DAWN: Warm peach/amber
+    ]
+    ambient_levels = [1.0, 0.55, 0.20, 0.55]
+    # Determine segment index (0 to 3) and local parameter t
+    segment = int(time_of_day * 4) % 4
+    t = (time_of_day * 4) % 1.0
+
+    # Apply non-linear easing to 't' for a natural rate of transition
+    t_eased = smoothstep(t)
+
+    # Get start and end colors for current phase
+    c1 = colors[segment]
+    c2 = colors[(segment + 1) % 4]
+
+    # Interpolate each channel
+    r = lerp(c1[0], c2[0], t_eased)
+    g = lerp(c1[1], c2[1], t_eased)
+    b = lerp(c1[2], c2[2], t_eased)
+
+    # Interpolate ambient lighting factor
+    a1 = ambient_levels[segment]
+    a2 = ambient_levels[(segment + 1) % 4]
+    ambient_light = lerp(a1, a2, t_eased)
+
+    # update sky
+    glClearColor(r, g, b, 1.0)
+    #  Update fog color to match the sky!
+    glFogfv(GL_FOG_COLOR, (r, g, b, 1.0))
 # ---------------- render loop ----------------
+
 
 def display():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
+
+    # Pass delta time to vehicle and rain updates
+    current_time = time.time()
+    dt = min(current_time - last_frame_time, 0.1)
+
     update_vehicle_physics()
+    update_rain(dt)  # Updates rain timer & particle movement
 
     look_x = cam_x + math.sin(math.radians(cam_angle)) * 10
     look_z = cam_z - math.cos(math.radians(cam_angle)) * 10
@@ -588,11 +752,12 @@ def display():
               0, 1, 0)
 
     ci, cj = stream_world(cam_x, cam_z)
-
+    update_sky()
     draw_ground(cam_x, cam_z)
     draw_footpaths(ci, cj)
     draw_roads(ci, cj)
     draw_world(ci, cj)
+    draw_rain()
 
     glutSwapBuffers()
 
@@ -657,16 +822,28 @@ def update_vehicle_physics():
     cam_z -= math.cos(rad) * car_speed * dt
 
 
-
 def init():
     glEnable(GL_DEPTH_TEST)
-    sky = (0.53, 0.81, 0.92, 1.0)
-    glClearColor(*sky)
 
-    # distance fog hides the streaming edge and sells the "endless city" feel
+#controls raindrops
+    global raindrops
+    raindrops = []
+    for _ in range(RAIN_COUNT):
+        # Spawn drops within a box centered around the starting camera
+        x = random.uniform(-100, 100)
+        y = random.uniform(0, 50)
+        z = random.uniform(-100, 100)
+        speed = random.uniform(30.0, 50.0)
+        length = random.uniform(1.2, 2.5)
+        raindrops.append([x, y, z, speed, length])
+
+    # Enable Alpha Blending for light glows
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    # Distance fog configuration
     glEnable(GL_FOG)
     glFogi(GL_FOG_MODE, GL_LINEAR)
-    glFogfv(GL_FOG_COLOR, sky)
     glFogf(GL_FOG_START, CELL_SIZE * (VIEW_RADIUS - 1))
     glFogf(GL_FOG_END, CELL_SIZE * (VIEW_RADIUS + 0.8))
 
@@ -699,6 +876,7 @@ def main():
     glutReshapeFunc(reshape)
     glutKeyboardFunc(keyboard_down)
     glutKeyboardUpFunc(keyboard_up)
+    glutTimerFunc(16, update_time, 0)
     glutIdleFunc(glutPostRedisplay)
     glutMainLoop()
 
