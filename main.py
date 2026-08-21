@@ -1,7 +1,7 @@
 from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
-import random, math
+import random, math,time
 
 WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 800
@@ -9,18 +9,28 @@ WINDOW_HEIGHT = 800
 # ---------------- camera ----------------
 cam_x, cam_z = 0.0, 15.0     # camera position (free-roam, GTA style)
 cam_angle = 0.0              # left/right turn angle in degrees
-move_speed = 0.6
 
+car_speed = 0.0
+max_speed = 40.0         # Top forward speed (units/sec)
+max_reverse_speed = -15.0 # Top reverse speed (units/sec)
+acceleration = 30.0      # How fast speed builds up (units/sec^2)
+deceleration = 10.0      # Coasting friction when no key is held
+steering_speed = 50.0    # Turn rate (degrees/sec)
+
+# Input tracking
+key_states = {'w': False, 's': False, 'a': False, 'd': False}
+last_frame_time = time.time()
 # ---------------- world / road-grid data ----------------
 # Instead of one straight road, the city is an infinite grid of streets
 # (like Manhattan blocks). Every intersection is a 4-way turn, and the
 # grid streams in every direction forever as the car drives around.
 ROAD_WIDTH = 20.0
 FOOTPATH_WIDTH = 4.0
-CELL_SIZE = 100.0                 # distance between two road centerlines
+CELL_SIZE = 150                # distance between two road centerlines
 BLOCK_MARGIN = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH   # gap before buildable land starts
 
-VIEW_RADIUS = 3                   # how many blocks out (in every direction) get streamed in
+
+VIEW_RADIUS = 1                 # how many blocks out (in every direction) get streamed in
 PRUNE_MARGIN = VIEW_RADIUS + 2    # cached blocks further than this get dropped
 
 # cache of generated blocks: {(bi, bj): {"trees": [...], "buildings": [...], "lamps": [...]}}
@@ -63,8 +73,8 @@ def generate_block(bi, bj):
     trees = []
     buildings = []
 
-    cols = max(1, int(area_w / 13))
-    rows = max(1, int(area_d / 13))
+    cols = max(1, int(area_w / 16))
+    rows = max(1, int(area_d / 16))
     cw = area_w / cols
     cd = area_d / rows
 
@@ -94,10 +104,18 @@ def generate_block(bi, bj):
     fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
     fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
     fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+
     lamps = [(fx0, fz0), (fx1, fz0), (fx0, fz1), (fx1, fz1),
              ((fx0 + fx1) / 2.0, fz0), ((fx0 + fx1) / 2.0, fz1)]
 
-    return {"trees": trees, "buildings": buildings, "lamps": lamps}
+    traffic_lights = [
+        (fx0 + 2, fz0 + 2, 270),
+        (fx1 - 2, fz0 + 2, 180),
+        (fx0 + 2, fz1 - 2, 0),
+        (fx1 - 2, fz1 - 2, 90)
+    ]
+
+    return {"trees": trees, "buildings": buildings, "lamps": lamps,"traffic_lights": traffic_lights}
 
 
 def stream_world(cx, cz):
@@ -269,7 +287,20 @@ def draw_intersections(ci, cj):
                         glVertex3f(gx - stripe_w / 2, 0.03, gz + 0.6)
                         glEnd()
 
+def get_traffic_states():
+    TRAFFIC_GREEN_TIME = 6
+    TRAFFIC_YELLOW_TIME = 3
+    TRAFFIC_RED_TIME = 6
+    t=time.time()
+    cycle=TRAFFIC_GREEN_TIME+TRAFFIC_YELLOW_TIME+TRAFFIC_RED_TIME
+    t=t%cycle
 
+    if t<TRAFFIC_GREEN_TIME:
+        return "green"
+    elif t<TRAFFIC_GREEN_TIME+TRAFFIC_YELLOW_TIME:
+        return "yellow"
+    else:
+        return "red"
 # ---------------- scenery ----------------
 
 def draw_tree(x, z, height, kind):
@@ -370,6 +401,65 @@ def draw_lamp(x, z):
     glPopMatrix()
 
 
+def draw_traffic_light(x, z,rotation, state):
+    glPushMatrix()
+    glTranslatef(x, 0, z)
+    glRotatef(rotation, 0, 1, 0)
+    # Pole
+    glColor3f(0.15, 0.15, 0.15)
+    glBegin(GL_QUADS)
+    glVertex3f(-0.12, 0, -0.12)
+    glVertex3f(0.12, 0, -0.12)
+    glVertex3f(0.12, 5, -0.12)
+    glVertex3f(-0.12, 5, -0.12)
+    glVertex3f(-0.12, 0, 0.12)
+    glVertex3f(0.12, 0, 0.12)
+    glVertex3f(0.12, 5, 0.12)
+    glVertex3f(-0.12, 5, 0.12)
+    glEnd()
+
+    # Traffic light box
+    glColor3f(0.03, 0.03, 0.03)
+    glPushMatrix()
+    glTranslatef(0, 5, 0)
+    glScalef(0.8, 2.0, 0.5)
+    glutSolidCube(1)
+    glPopMatrix()
+
+    # Red
+    if state == "red":
+        glColor3f(1, 0, 0)
+    else:
+        glColor3f(0.15, 0, 0)
+    glPushMatrix()
+    glTranslatef(0, 5.45, -0.26)
+    glutSolidSphere(0.18, 12, 12)
+    glPopMatrix()
+
+    # Yellow
+    if state == "yellow":
+        glColor3f(1, 1, 0)
+    else:
+        glColor3f(0.15, 0.15, 0)
+    glPushMatrix()
+    glTranslatef(0, 5, -0.26)
+    glutSolidSphere(0.18, 12, 12)
+    glPopMatrix()
+
+    # Green
+    if state == "green":
+        glColor3f(0, 1, 0)
+    else:
+        glColor3f(0, 0.15, 0)
+    glPushMatrix()
+    glTranslatef(0, 4.55, -0.26)
+    glutSolidSphere(0.18, 12, 12)
+    glPopMatrix()
+
+    glPopMatrix()
+
+
+
 def draw_world(ci, cj):
     for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
         for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
@@ -382,6 +472,8 @@ def draw_world(ci, cj):
                 draw_building(x, z, w, d, h, color, win_seed)
             for (x, z) in block["lamps"]:
                 draw_lamp(x, z)
+            for (x, z,rotation )in block["traffic_lights"]:
+                draw_traffic_light(x,z,rotation,get_traffic_states())
 
 
 # ---------------- render loop ----------------
@@ -390,6 +482,7 @@ def display():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
+    update_vehicle_physics()
 
     look_x = cam_x + math.sin(math.radians(cam_angle)) * 10
     look_z = cam_z - math.cos(math.radians(cam_angle)) * 10
@@ -407,22 +500,65 @@ def display():
     glutSwapBuffers()
 
 
-def keyboard(key, x, y):
-    global cam_x, cam_z, cam_angle
-    rad = math.radians(cam_angle)
-    if key == b'w':          # drive forward
-        cam_x += math.sin(rad) * move_speed
-        cam_z -= math.cos(rad) * move_speed
-    elif key == b's':        # reverse
-        cam_x -= math.sin(rad) * move_speed
-        cam_z += math.cos(rad) * move_speed
-    elif key == b'a':        # turn left
-        cam_angle -= 3
-    elif key == b'd':        # turn right
-        cam_angle += 3
-    elif key == b'\x1b':     # ESC to quit
+# ---------------- updated keyboard handlers ----------------
+
+def keyboard_down(key, x, y):
+    global key_states
+    k = key.decode('utf-8').lower() if isinstance(key, bytes) else key.lower()
+    if k in key_states:
+        key_states[k] = True
+    elif key == b'\x1b':  # ESC
         glutLeaveMainLoop()
-    glutPostRedisplay()
+
+
+def keyboard_up(key, x, y):
+    global key_states
+    k = key.decode('utf-8').lower() if isinstance(key, bytes) else key.lower()
+    if k in key_states:
+        key_states[k] = False
+
+# ---------------- smooth physics update ----------------
+
+def update_vehicle_physics():
+    global cam_x, cam_z, cam_angle, car_speed, last_frame_time
+
+    current_time = time.time()
+    dt = current_time - last_frame_time
+    last_frame_time = current_time
+
+    # Cap delta time to avoid physics jumps on high latency frame drops
+    dt = min(dt, 0.1)
+
+    # 1. Acceleration & Braking / Reverse
+    if key_states['w']:
+        car_speed += acceleration * dt
+    elif key_states['s']:
+        car_speed -= acceleration * dt
+    else:
+        # Natural coasting deceleration when no drive keys are pressed
+        if car_speed > 0:
+            car_speed = max(0.0, car_speed - deceleration * dt)
+        elif car_speed < 0:
+            car_speed = min(0.0, car_speed + deceleration * dt)
+
+    # Clamp top speeds
+    car_speed = max(max_reverse_speed, min(max_speed, car_speed))
+
+    # 2. Steering (Only turns when the vehicle is actively moving)
+    if abs(car_speed) > 0.1:
+        # Reverse steering direction when reversing
+        dir_factor = 1.0 if car_speed >= 0 else -1.0
+
+        if key_states['a']:
+            cam_angle -= steering_speed * dt * dir_factor
+        if key_states['d']:
+            cam_angle += steering_speed * dt * dir_factor
+
+    # 3. Position Translation
+    rad = math.radians(cam_angle)
+    cam_x += math.sin(rad) * car_speed * dt
+    cam_z -= math.cos(rad) * car_speed * dt
+
 
 
 def init():
@@ -434,8 +570,8 @@ def init():
     glEnable(GL_FOG)
     glFogi(GL_FOG_MODE, GL_LINEAR)
     glFogfv(GL_FOG_COLOR, sky)
-    glFogf(GL_FOG_START, CELL_SIZE * (VIEW_RADIUS - 1.5))
-    glFogf(GL_FOG_END, CELL_SIZE * (VIEW_RADIUS + 1))
+    glFogf(GL_FOG_START, CELL_SIZE * (VIEW_RADIUS - 1))
+    glFogf(GL_FOG_END, CELL_SIZE * (VIEW_RADIUS + 0.8))
 
     stream_world(cam_x, cam_z)
 
@@ -464,10 +600,12 @@ def main():
     init()
     glutDisplayFunc(display)
     glutReshapeFunc(reshape)
-    glutKeyboardFunc(keyboard)
+    glutKeyboardFunc(keyboard_down)
+    glutKeyboardUpFunc(keyboard_up)
     glutIdleFunc(glutPostRedisplay)
     glutMainLoop()
 
 
 if __name__ == "__main__":
+
     main()
