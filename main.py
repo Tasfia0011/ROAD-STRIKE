@@ -108,6 +108,31 @@ def generate_block(bi, bj):
     lamps = [(fx0, fz0), (fx1, fz0), (fx0, fz1), (fx1, fz1),
              ((fx0 + fx1) / 2.0, fz0), ((fx0 + fx1) / 2.0, fz1)]
 
+    # Edge coordinates for the footpaths bordering the roads
+    fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+    fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+    fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+    fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+
+    street_lamps = []
+
+    # Distance between consecutive street lamps along the block
+    LAMP_SPACING = 35.0  # Adjust this value to make lights denser or sparser
+    inset = 10.0  # Distance from intersection corners to first lamp
+
+    # 1. Place lamps along North and South block edges (facing East-West roads)
+    z_pos = fz0 + inset
+    while z_pos <= fz1 - inset:
+        street_lamps.append((fx0, z_pos, 90))  # Left side footpath (arm points right toward road)
+        street_lamps.append((fx1, z_pos, -90))  # Right side footpath (arm points left toward road)
+        z_pos += LAMP_SPACING
+
+    # 2. Place lamps along East and West block edges (facing North-South roads)
+    x_pos = fx0 + inset
+    while x_pos <= fx1 - inset:
+        street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath (arm points forward toward road)
+        street_lamps.append((x_pos, fz1, 180))  # Top side footpath (arm points backward toward road)
+        x_pos += LAMP_SPACING
     traffic_lights = [
         (fx0 + 2, fz0 + 2, 270),
         (fx1 - 2, fz0 + 2, 180),
@@ -115,7 +140,28 @@ def generate_block(bi, bj):
         (fx1 - 2, fz1 - 2, 90)
     ]
 
-    return {"trees": trees, "buildings": buildings, "lamps": lamps,"traffic_lights": traffic_lights}
+    return {"trees": trees, "buildings": buildings, "lamps": lamps,"street_lamps": street_lamps,"traffic_lights": traffic_lights}
+
+
+def stream_world(cx, cz):
+    """Make sure every block within VIEW_RADIUS of the camera exists,
+    and forget blocks that are far behind us (classic open-world streaming)."""
+
+    ci, cj = camera_block(cx, cz)
+
+    for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
+        for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
+            if (bi, bj) not in block_cache:
+                block_cache[(bi, bj)] = generate_block(bi, bj)
+
+    stale = [key for key in block_cache
+             if abs(key[0] - ci) > PRUNE_MARGIN or abs(key[1] - cj) > PRUNE_MARGIN]
+    for key in stale:
+        del block_cache[key]
+
+    return ci, cj
+
+
 
 
 def stream_world(cx, cz):
@@ -401,6 +447,55 @@ def draw_lamp(x, z):
     glPopMatrix()
 
 
+def draw_Street_lamp(x, z, angle):
+    glPushMatrix()
+    glTranslatef(x, 0, z)
+    glRotatef(angle, 0, 1, 0)
+
+    glScalef(1.5, 1.5, 1.5)  # Makes the entire lamp 1.5x bigger
+
+    quad = gluNewQuadric()
+
+    # 1. Main Vertical Pole
+    glColor3f(0.25, 0.25, 0.28)
+    glPushMatrix()
+    glRotatef(-90, 1, 0, 0)
+    gluCylinder(quad, 0.22, 0.16, 8.0, 10, 1)
+    glPopMatrix()
+
+    # 2. Arm extending forward toward the road (+X direction)
+    glPushMatrix()
+    glTranslatef(0, 8.0, 0)
+    glRotatef(180, 0, 1, 0)
+    gluCylinder(quad, 0.15, 0.10, 3.0, 10, 1)
+    glPopMatrix()
+
+    # 3. Lamp head at end of arm
+    glPushMatrix()
+    glRotatef(90, 0, 1, 0)
+    glTranslatef(3.0, 8.0, 0)
+
+    # Housing
+    glColor3f(0.15, 0.15, 0.17)
+    glPushMatrix()
+    glScalef(1.4, 0.25, 0.7)
+    glutSolidCube(1)
+    glPopMatrix()
+
+    # Bottom Glowing Light Pad
+    glColor3f(1.0, 0.9, 0.6)
+    glBegin(GL_QUADS)
+    glVertex3f(-0.6, -0.13, -0.3)
+    glVertex3f(0.6, -0.13, -0.3)
+    glVertex3f(0.6, -0.13, 0.3)
+    glVertex3f(-0.6, -0.13, 0.3)
+    glEnd()
+
+    glPopMatrix()
+    gluDeleteQuadric(quad)
+    glPopMatrix()
+
+
 def draw_traffic_light(x, z,rotation, state):
     glPushMatrix()
     glTranslatef(x, 0, z)
@@ -472,6 +567,8 @@ def draw_world(ci, cj):
                 draw_building(x, z, w, d, h, color, win_seed)
             for (x, z) in block["lamps"]:
                 draw_lamp(x, z)
+            for (x, z, angle) in block["street_lamps"]:
+                draw_Street_lamp(x, z, angle)
             for (x, z,rotation )in block["traffic_lights"]:
                 draw_traffic_light(x,z,rotation,get_traffic_states())
 
