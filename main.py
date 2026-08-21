@@ -87,84 +87,117 @@ def generate_block(bi, bj):
 
     trees = []
     buildings = []
+    hospitals = []
+    schools = []
+    lamps=[]
+    street_lamps=[]
+    traffic_lights = []
 
-    cols = max(1, int(area_w / 16))
-    rows = max(1, int(area_d / 16))
-    cw = area_w / cols
-    cd = area_d / rows
+    # Check if this block borders an active main road
+    borders_road = (bi % INTERSECTION_INTERVAL == 0) or (bj % INTERSECTION_INTERVAL == 0)
 
-    for gx in range(cols):
-        for gz in range(rows):
-            cx0 = bx0 + gx * cw
-            cz0 = bz0 + gz * cd
-            x = cx0 + rnd.uniform(cw * 0.25, cw * 0.75)
-            z = cz0 + rnd.uniform(cd * 0.25, cd * 0.75)
-            r = rnd.random()
+    # Roll a chance for landmark buildings (only on road-adjacent blocks)
+    landmark_roll = rnd.random() if borders_road else 1.0
 
-            if r < 0.22:
-                height = rnd.uniform(5.0, 8.5)
-                kind = 'pine' if rnd.random() < 0.4 else 'round'
-                trees.append((x, z, height, kind))
-            elif r < 0.88:
-                w = rnd.uniform(6.0, 11.0)
-                d = rnd.uniform(6.0, 11.0)
-                h = rnd.uniform(10.0, 34.0)
-                color = rnd.choice(BUILDING_COLORS)
-                win_seed = rnd.uniform(0, 1000)
-                buildings.append((x, z, w, d, h, color, win_seed))
-            # remaining chance -> empty grassy lot / small park, adds visual variety
+    if landmark_roll < 0.08:
+        # Spawn a Hospital in the center of the block
+        x = (bx0 + bx1) / 2.0
+        z = (bz0 + bz1) / 2.0
+        hospitals.append((x, z, 22.0, 22.0, 18.0))  # Wide and tall structure
 
-    # lamp posts along the four footpath edges of the block
-    fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-    fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
-    fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-    fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+    elif landmark_roll < 0.16:
+        # Spawn a School in the center of the block
+        x = (bx0 + bx1) / 2.0
+        z = (bz0 + bz1) / 2.0
+        schools.append((x, z, 28.0, 16.0, 10.0))  # Long and low-rise structure
 
-    lamps = [(fx0, fz0), (fx1, fz0), (fx0, fz1), (fx1, fz1),
-             ((fx0 + fx1) / 2.0, fz0), ((fx0 + fx1) / 2.0, fz1)]
-
-    # Edge coordinates for the footpaths bordering the roads
-    fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-    fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
-    fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-    fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
-
-    street_lamps = []
-
-    # Distance between consecutive street lamps along the block
-    LAMP_SPACING = 35.0  # Adjust this value to make lights denser or sparser
-    inset = 10.0  # Distance from intersection corners to first lamp
-
-    # 1. Place lamps along North and South block edges (facing East-West roads)
-    z_pos = fz0 + inset
-    while z_pos <= fz1 - inset:
-        street_lamps.append((fx0, z_pos, 90))  # Left side footpath (arm points right toward road)
-        street_lamps.append((fx1, z_pos, -90))  # Right side footpath (arm points left toward road)
-        z_pos += LAMP_SPACING
-
-    # 2. Place lamps along East and West block edges (facing North-South roads)
-    x_pos = fx0 + inset
-    while x_pos <= fx1 - inset:
-        street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath (arm points forward toward road)
-        street_lamps.append((x_pos, fz1, 180))  # Top side footpath (arm points backward toward road)
-        x_pos += LAMP_SPACING
-
-    # Only generate traffic lights at true road intersections
-    if bi % INTERSECTION_INTERVAL == 0 and bj % INTERSECTION_INTERVAL == 0:
-        x = bi * CELL_SIZE
-        z = bj * CELL_SIZE
-        offset = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0  # Offset to corner of curb
-
-        traffic_lights = [
-            (x - offset, z - offset, 90),  # SW Corner facing East
-            (x + offset, z - offset, 0),  # SE Corner facing North
-            (x + offset, z + offset, 270),  # NE Corner facing West
-            (x - offset, z + offset, 180)  # NW Corner facing South
-        ]
     else:
-        traffic_lights = []
 
-    return {"trees": trees, "buildings": buildings, "lamps": lamps,"street_lamps": street_lamps,"traffic_lights": traffic_lights}
+        cols = max(1, int(area_w / 16))
+        rows = max(1, int(area_d / 16))
+        cw = area_w / cols
+        cd = area_d / rows
+
+        for gx in range(cols):
+            for gz in range(rows):
+                cx0 = bx0 + gx * cw
+                cz0 = bz0 + gz * cd
+                x = cx0 + rnd.uniform(cw * 0.25, cw * 0.75)
+                z = cz0 + rnd.uniform(cd * 0.25, cd * 0.75)
+                r = rnd.random()
+
+                if r < 0.22:
+                    height = rnd.uniform(5.0, 8.5)
+                    kind = 'pine' if rnd.random() < 0.4 else 'round'
+                    trees.append((x, z, height, kind))
+                elif r < 0.88:
+                    w = rnd.uniform(6.0, 11.0)
+                    d = rnd.uniform(6.0, 11.0)
+                    h = rnd.uniform(10.0, 34.0)
+                    color = rnd.choice(BUILDING_COLORS)
+                    win_seed = rnd.uniform(0, 1000)
+                    buildings.append((x, z, w, d, h, color, win_seed))
+                # remaining chance -> empty grassy lot / small park, adds visual variety
+
+        # lamp posts along the four footpath edges of the block
+        fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+        fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+        fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+        fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+
+        lamps = [(fx0, fz0), (fx1, fz0), (fx0, fz1), (fx1, fz1),
+                 ((fx0 + fx1) / 2.0, fz0), ((fx0 + fx1) / 2.0, fz1)]
+
+        # Edge coordinates for the footpaths bordering the roads
+        fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+        fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+        fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+        fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+
+
+
+        # Distance between consecutive street lamps along the block
+        LAMP_SPACING = 35.0  # Adjust this value to make lights denser or sparser
+        inset = 10.0  # Distance from intersection corners to first lamp
+
+        # 1. Place lamps along North and South block edges (facing East-West roads)
+        z_pos = fz0 + inset
+        while z_pos <= fz1 - inset:
+            street_lamps.append((fx0, z_pos, 90))  # Left side footpath (arm points right toward road)
+            street_lamps.append((fx1, z_pos, -90))  # Right side footpath (arm points left toward road)
+            z_pos += LAMP_SPACING
+
+        # 2. Place lamps along East and West block edges (facing North-South roads)
+        x_pos = fx0 + inset
+        while x_pos <= fx1 - inset:
+            street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath (arm points forward toward road)
+            street_lamps.append((x_pos, fz1, 180))  # Top side footpath (arm points backward toward road)
+            x_pos += LAMP_SPACING
+
+        # Only generate traffic lights at true road intersections
+        if bi % INTERSECTION_INTERVAL == 0 and bj % INTERSECTION_INTERVAL == 0:
+            x = bi * CELL_SIZE
+            z = bj * CELL_SIZE
+            offset = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0  # Offset to corner of curb
+
+            traffic_lights = [
+                (x - offset, z - offset, 90),  # SW Corner facing East
+                (x + offset, z - offset, 0),  # SE Corner facing North
+                (x + offset, z + offset, 270),  # NE Corner facing West
+                (x - offset, z + offset, 180)  # NW Corner facing South
+            ]
+
+
+    return {
+        "buildings": buildings,
+        "hospitals": hospitals,
+        "schools": schools,
+        "trees": trees,
+        "lamps": lamps,
+        "street_lamps": street_lamps,
+        "traffic_lights": traffic_lights
+    }
+
 
 
 def stream_world(cx, cz):
@@ -324,6 +357,99 @@ def draw_lane_markings(ci, cj):
                 glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + lo)
                 glEnd()
 
+
+def draw_box(cx, base_y, cz, w, h, d, color):
+    """Axis aligned box. (cx, cz) = center on ground, base_y = bottom Y."""
+    x0, x1 = cx - w / 2, cx + w / 2
+    y0, y1 = base_y, base_y + h
+    z0, z1 = cz - d / 2, cz + d / 2
+
+    faces = [
+        ((0, 0, 1), [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]),  # front
+        ((0, 0, -1), [(x1, y0, z0), (x0, y0, z0), (x0, y1, z0), (x1, y1, z0)]),  # back
+        ((-1, 0, 0), [(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)]),  # left
+        ((1, 0, 0), [(x1, y0, z1), (x1, y0, z0), (x1, y1, z0), (x1, y1, z1)]),  # right
+        ((0, 1, 0), [(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)]),  # top
+        ((0, -1, 0), [(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)]),  # bottom
+    ]
+
+    set_env_color(*color)
+
+    glBegin(GL_QUADS)
+    for normal, verts in faces:
+        glNormal3fv(normal)
+        for v in verts:
+            glVertex3fv(v)
+    glEnd()
+
+
+def draw_hospital(cx, cz):
+    white = (0.9, 0.9, 0.9)
+    red = (0.8, 0.05, 0.05)
+
+    glPushMatrix()
+
+    glTranslatef(cx, 0, cz)
+    glScalef(2.4, 2.4, 2.4)
+    glTranslatef(-cx, 0, -cz)
+
+    # Main building
+    draw_box(cx, 0, cz, 24, 10, 16, white)
+
+    # Upper block
+    draw_box(cx, 10, cz, 14, 7, 12, white)
+
+    # RED CROSSES - 4 SIDES
+
+    # Front (+Z)
+    draw_box(cx, 13.5, cz + 6.05, 5, 1.0, 0.1, red)
+    draw_box(cx, 11.5, cz + 6.05, 1.2, 5, 0.1, red)
+
+    # Back (-Z)
+    draw_box(cx, 13.5, cz - 6.05, 5, 1.0, 0.1, red)
+    draw_box(cx, 11.5, cz - 6.05, 1.2, 5, 0.1, red)
+
+    # Right (+X)
+    draw_box(cx + 7.05, 13.5, cz, 0.1, 1.0, 5, red)
+    draw_box(cx + 7.05, 11.5, cz, 0.1, 5, 1.2, red)
+
+    # Left (-X)
+    draw_box(cx - 7.05, 13.5, cz, 0.1, 1.0, 5, red)
+    draw_box(cx - 7.05, 11.5, cz, 0.1, 5, 1.2, red)
+
+    glPopMatrix()
+
+    # Trees
+    draw_tree(cx - 50, cz - 5, 6, "round")
+    draw_tree(cx + 50, cz - 5, 6, "round")
+    draw_tree(cx - 50, cz + 5, 5, "round")
+
+
+
+def draw_school(cx, cz):
+    brick = (0.65, 0.3, 0.2)
+    white = (0.9, 0.85, 0.7)
+    blue = (0.3, 0.65, 0.85)
+
+    glPushMatrix()
+
+    # Scale school around its center
+    glTranslatef(cx, 0, cz)
+    glScalef(2, 2, 2)
+    glTranslatef(-cx, 0, -cz)
+
+    draw_box(cx, 0, cz, 30, 8, 14, brick)
+    draw_box(cx, 8, cz, 31, 0.6, 15, white)
+    draw_box(cx, 3.5, cz + 7.1, 24, 3, 0.1, blue)
+    draw_box(cx, 0, cz + 7.2, 4, 4, 0.2, white)
+
+    glPopMatrix()
+
+    # Trees
+    draw_tree(cx - 50, cz - 4, 6, "round")
+    draw_tree(cx + 50, cz - 4, 6, "round")
+    draw_tree(cx - 50, cz + 4, 5, "round")
+    draw_tree(cx + 50, cz + 4, 5, "round")
 
 
 def draw_intersections(ci, cj):
@@ -675,6 +801,11 @@ def draw_world(ci, cj):
             block = block_cache.get((bi, bj))
             if not block:
                 continue
+            # Draw unique landmark buildings
+            for (x, z, w, d, h) in block.get("hospitals", []):
+                draw_hospital(x, z)
+            for (x, z, w, d, h) in block.get("schools", []):
+                draw_school(x, z)
             for (x, z, height, kind) in block["trees"]:
                 draw_tree(x, z, height, kind)
             for (x, z, w, d, h, color, win_seed) in block["buildings"]:
