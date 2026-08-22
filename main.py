@@ -7,7 +7,11 @@ WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 800
 time_of_day = 0.0  # what daytime is now? morning/noon/day
 ambient_light = 1.0  # change of environment color according to day time
+game_state = "PLAYING"
 
+# Button rectangles in screen pixels (x1, y1, x2, y2) — recalculated each resize
+resume_btn = (0, 0, 0, 0)
+quit_btn   = (0, 0, 0, 0)
 # ---------------- camera ----------------
 cam_x, cam_z = 0.0, 15.0     # camera position
 cam_angle = 0.0              # left/right turn angle in degrees
@@ -238,17 +242,80 @@ def stream_world(cx, cz):
 
 
 def update_time(value):
-    global time_of_day
+    global time_of_day,game_state
 
-    time_of_day += 0.0005
+    if game_state == "PLAYING":
+        time_of_day += 0.0005
 
-    if time_of_day >= 1.0:
-        time_of_day = 0.0
+        if time_of_day >= 1.0:
+            time_of_day = 0.0
 
     glutPostRedisplay()
     glutTimerFunc(16, update_time, 0)
 
 
+def draw_button(rect, label):
+    x1, y1, x2, y2 = rect #react= button coordinates
+    glColor3f(0.15, 0.15, 0.15)
+    glBegin(GL_QUADS)
+    glVertex2f(x1, y1); glVertex2f(x2, y1)
+    glVertex2f(x2, y2); glVertex2f(x1, y2)
+    glEnd()
+
+    glColor3f(1, 1, 1)
+    glLineWidth(2)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(x1, y1)
+    glVertex2f(x2, y1)
+    glVertex2f(x2, y2)
+    glVertex2f(x1, y2)
+    glEnd()
+
+    glRasterPos2f(x1 + 80, (y1 + y2) / 2 - 5)
+    for ch in label:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+
+
+def draw_pause_overlay():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
+
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_FOG)
+
+    glEnable(GL_BLEND)
+    glColor4f(0, 0, 0, 0.6)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0); glVertex2f(WINDOW_WIDTH, 0)
+    glVertex2f(WINDOW_WIDTH, WINDOW_HEIGHT); glVertex2f(0, WINDOW_HEIGHT)
+    glEnd()
+
+    glColor3f(1, 1, 1)
+    glRasterPos2f(WINDOW_WIDTH / 2 -40, WINDOW_HEIGHT / 2 + 150)
+    for ch in "PAUSED":
+        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, ord(ch))
+
+    draw_button(resume_btn, "Resume")
+    draw_button(quit_btn, "Quit")
+
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_FOG)
+
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+
+def point_in_rect(px, py, rect):
+    x1, y1, x2, y2 = rect
+    return x1 <= px <= x2 and y1 <= py <= y2
 
 # ---------------- ground / road / footpaths ----------------
 
@@ -1014,8 +1081,17 @@ def update_sky():
     glClearColor(r, g, b, 1.0)
     #  Update fog color to match the sky!
     glFogfv(GL_FOG_COLOR, (r, g, b, 1.0))
-# ---------------- render loop ----------------
 
+
+def mouse(button, state, x, y):
+    global game_state
+    if game_state != "PAUSED" or button != GLUT_LEFT_BUTTON or state != GLUT_DOWN:
+        return
+    gl_y = WINDOW_HEIGHT - y
+    if point_in_rect(x, gl_y, resume_btn):
+        game_state = "PLAYING"
+    elif point_in_rect(x, gl_y, quit_btn):
+        glutLeaveMainLoop()
 
 def display():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -1026,8 +1102,9 @@ def display():
     current_time = time.time()
     dt = min(current_time - last_frame_time, 0.1)
 
-    update_vehicle_physics()
-    update_rain(dt)  # Updates rain timer & particle movement
+    if game_state == "PLAYING":
+        update_vehicle_physics()
+        update_rain(dt)
 
     look_x = cam_x + math.sin(math.radians(cam_angle)) * 10
     look_z = cam_z - math.cos(math.radians(cam_angle)) * 10
@@ -1043,18 +1120,28 @@ def display():
     draw_world(ci, cj)
     draw_rain()
 
+    if game_state == "PAUSED":
+        draw_pause_overlay()
     glutSwapBuffers()
 
 
-# ---------------- updated keyboard handlers ----------------
+
+# keyboard handlers
 
 def keyboard_down(key, x, y):
-    global key_states
+    global key_states, game_state
+    if key == b'\x1b':  # ESC
+        game_state = "PAUSED" if game_state == "PLAYING" else "PLAYING"
+        glutPostRedisplay()
+        return
+
+    if game_state != "PLAYING":
+        return  # ignore movement/other keys while paused
+
     k = key.decode('utf-8').lower() if isinstance(key, bytes) else key.lower()
     if k in key_states:
         key_states[k] = True
-    elif key == b'\x1b':  # ESC
-        glutLeaveMainLoop()
+
 
 
 def keyboard_up(key, x, y):
@@ -1063,7 +1150,7 @@ def keyboard_up(key, x, y):
     if k in key_states:
         key_states[k] = False
 
-# ---------------- smooth physics update ----------------
+
 
 def update_vehicle_physics():
     global cam_x, cam_z, cam_angle, car_speed, last_frame_time
@@ -1100,11 +1187,22 @@ def update_vehicle_physics():
         if key_states['d']:
             cam_angle += steering_speed * dt * dir_factor
 
-    # 3. Position Translation
+    #  Position Translation
     rad = math.radians(cam_angle)
     cam_x += math.sin(rad) * car_speed * dt
     cam_z -= math.cos(rad) * car_speed * dt
 
+def layout_pause_buttons():
+    global resume_btn, quit_btn
+    cx = WINDOW_WIDTH // 2
+    btn_w, btn_h = 220, 60
+    gap = 20
+
+    resume_y = WINDOW_HEIGHT // 2 - btn_h // 2
+    quit_y   = resume_y + btn_h + gap
+
+    resume_btn = (cx - btn_w // 2, resume_y, cx + btn_w // 2, resume_y + btn_h)
+    quit_btn   = (cx - btn_w // 2, quit_y,   cx + btn_w // 2, quit_y + btn_h)
 
 def init():
     glEnable(GL_DEPTH_TEST)
@@ -1143,12 +1241,12 @@ def reshape(w, h):
     glLoadIdentity()
     gluPerspective(60, float(w) / float(h if h else 1), 0.1, 500.0)
     glMatrixMode(GL_MODELVIEW)
+    layout_pause_buttons()
     glutPostRedisplay()
 
 
 def main():
     glutInit()
-
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
     glutInitWindowSize(1000, 800)
     glutInitWindowPosition(0, 0)
@@ -1156,10 +1254,12 @@ def main():
 
     glEnable(GL_DEPTH_TEST)
     init()
+    layout_pause_buttons()
     glutDisplayFunc(display)
     glutReshapeFunc(reshape)
     glutKeyboardFunc(keyboard_down)
     glutKeyboardUpFunc(keyboard_up)
+    glutMouseFunc(mouse)
     glutTimerFunc(16, update_time, 0)
     glutIdleFunc(glutPostRedisplay)
     glutMainLoop()
