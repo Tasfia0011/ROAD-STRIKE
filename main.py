@@ -5,17 +5,18 @@ import random, math,time
 
 WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 800
-time_of_day = 0.0
-ambient_light = 1.0
+time_of_day = 0.0  # what daytime is now? morning/noon/day
+ambient_light = 1.0  # change of environment color according to day time
+
 # ---------------- camera ----------------
-cam_x, cam_z = 0.0, 15.0     # camera position (free-roam, GTA style)
+cam_x, cam_z = 0.0, 15.0     # camera position
 cam_angle = 0.0              # left/right turn angle in degrees
 
 # ---------------- Rain System ----------------
-RAIN_COUNT = 1000
+RAIN_COUNT = 1000 #number of raindrops stored
 raindrops = []
 is_raining = False
-last_rain_toggle = time.time()
+last_rain_toggle = time.time() #duration between each rain
 
 car_speed = 0.0
 max_speed = 40.0         # Top forward speed (units/sec)
@@ -27,15 +28,16 @@ steering_speed = 50.0    # Turn rate (degrees/sec)
 INTERSECTION_INTERVAL = 4  # Road intersections every 4 blocks
 
 # Input tracking
-key_states = {'w': False, 's': False, 'a': False, 'd': False}
+key_states = {'w': False, 's': False, 'a': False, 'd': False} #keeps track of which movement buttons are being pressed
 last_frame_time = time.time()
+
 # ---------------- world / road-grid data ----------------
-# Instead of one straight road, the city is an infinite grid of streets
-# (like Manhattan blocks). Every intersection is a 4-way turn, and the
+# Instead of one straight road, the city is an infinite grid of streets and blocks
+#  Every intersection is a 4-way turn, and the
 # grid streams in every direction forever as the car drives around.
 ROAD_WIDTH = 20.0
 FOOTPATH_WIDTH = 4.0
-CELL_SIZE = 150               # distance between two road centerlines
+CELL_SIZE = 150               # size of each block of buildings tree etc
 BLOCK_MARGIN = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH   # gap before buildable land starts
 
 
@@ -53,38 +55,37 @@ BUILDING_COLORS = [
     (0.75, 0.70, 0.60),
     (0.65, 0.70, 0.65),
     (0.85, 0.75, 0.55),
-    (0.50, 0.55, 0.60),
-]
+    (0.50, 0.55, 0.60),]
 
-
-# ---------------- infinite block streaming ----------------
-
+#takes players position as input and returns the current block position
 def camera_block(cx, cz):
     return int(math.floor(cx / CELL_SIZE)), int(math.floor(cz / CELL_SIZE))
 
+#controls color shade according to day night
 def set_env_color(r, g, b):
-    """Sets glColor3f scaled by current atmospheric lighting."""
     glColor3f(r * ambient_light, g * ambient_light, b * ambient_light)
 
+# each block of the world is controlled by this func & takes block num as input
 def generate_block(bi, bj):
-    """Deterministically build the contents of a single city block.
-    Same (bi, bj) always produces the same block, so the world is stable
-    even though it is generated on the fly, chunk by chunk."""
-    global INTERSECTION_INTERVAL
+
+    global INTERSECTION_INTERVAL, BLOCK_MARGIN
+
+    #ensures a particular block always has the same structure of buildings,trees
+    # Even if the block is deleted ,it will generate the deleted block with same layout again
     seed = (bi * 73856093) ^ (bj * 19349663) ^ 0x9E3779B9
     rnd = random.Random(seed)
 
-    # Allow buildings and trees to occupy blocks between roads
-    margin = 2.0
-
+# this part determines the boundary coordinates of the block
     bx0 = bi * CELL_SIZE + BLOCK_MARGIN
     bx1 = (bi + 1) * CELL_SIZE - BLOCK_MARGIN
     bz0 = bj * CELL_SIZE + BLOCK_MARGIN
     bz1 = (bj + 1) * CELL_SIZE - BLOCK_MARGIN
 
+#area of the block in both axis to define the usable area in block
     area_w = bx1 - bx0
     area_d = bz1 - bz0
 
+#things inside the block
     trees = []
     buildings = []
     hospitals = []
@@ -92,27 +93,47 @@ def generate_block(bi, bj):
     lamps=[]
     street_lamps=[]
     traffic_lights = []
+    road_signs=[]
 
-    # Check if this block borders an active main road
+    # inward block corners
+    fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+    fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
+    fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+    fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
+
+    #since intersection lvl=4 here so if bi,bj s position is  multiple of 4
+    # ensures i get road intersection after 4 or 8 or 12 etc blocks.after every 4 blocks
     borders_road = (bi % INTERSECTION_INTERVAL == 0) or (bj % INTERSECTION_INTERVAL == 0)
 
-    # Roll a chance for landmark buildings (only on road-adjacent blocks)
+    # it decides will it generate hospita or school or a block of buildings near intersection
     landmark_roll = rnd.random() if borders_road else 1.0
 
-    if landmark_roll < 0.08:
+    if landmark_roll < 0.07:
         # Spawn a Hospital in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
-        hospitals.append((x, z, 22.0, 22.0, 18.0))  # Wide and tall structure
+        hospitals.append((x, z, 22.0, 22.0, 18.0))  #(x,z,width,depth,height)
 
-    elif landmark_roll < 0.16:
+        #puts the speed limit board
+        road_signs.append((fx0, fz0+5, 0))
+        road_signs.append((fx1, fz0+5, 0))
+        road_signs.append((fx0 , fz1-5 , 0))
+        road_signs.append((fx1, fz1-5, 0))
+
+    elif landmark_roll < 0.14:
         # Spawn a School in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
         schools.append((x, z, 28.0, 16.0, 10.0))  # Long and low-rise structure
 
+        #puts speed limit sign
+        road_signs.append((fx0, fz0 + 5, 0))
+        road_signs.append((fx1, fz0 + 5, 0))
+        road_signs.append((fx0, fz1 - 5, 0))
+        road_signs.append((fx1, fz1 - 5, 0))
     else:
-
+        #divides each block in smaller blocks with rows and cols
+        #each smaller blocks contains either tree/building/open space
         cols = max(1, int(area_w / 16))
         rows = max(1, int(area_d / 16))
         cw = area_w / cols
@@ -122,10 +143,12 @@ def generate_block(bi, bj):
             for gz in range(rows):
                 cx0 = bx0 + gx * cw
                 cz0 = bz0 + gz * cd
+                #random positions preventing everything from being perfectly aligned
                 x = cx0 + rnd.uniform(cw * 0.25, cw * 0.75)
                 z = cz0 + rnd.uniform(cd * 0.25, cd * 0.75)
                 r = rnd.random()
 
+                #if r<0.22 -> tree , if r <0.88 -> building else open space
                 if r < 0.22:
                     height = rnd.uniform(5.0, 8.5)
                     kind = 'pine' if rnd.random() < 0.4 else 'round'
@@ -137,41 +160,27 @@ def generate_block(bi, bj):
                     color = rnd.choice(BUILDING_COLORS)
                     win_seed = rnd.uniform(0, 1000)
                     buildings.append((x, z, w, d, h, color, win_seed))
-                # remaining chance -> empty grassy lot / small park, adds visual variety
-
-        # lamp posts along the four footpath edges of the block
-        fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-        fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
-        fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-        fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
-
-        lamps = [(fx0, fz0), (fx1, fz0), (fx0, fz1), (fx1, fz1),
-                 ((fx0 + fx1) / 2.0, fz0), ((fx0 + fx1) / 2.0, fz1)]
-
-        # Edge coordinates for the footpaths bordering the roads
-        fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-        fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
-        fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
-        fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
 
 
 
-        # Distance between consecutive street lamps along the block
-        LAMP_SPACING = 35.0  # Adjust this value to make lights denser or sparser
-        inset = 10.0  # Distance from intersection corners to first lamp
+        temp=7 #extra distance of lamps from corners
+        lamps = [(fx0, fz0+temp), (fx1, fz0+temp), (fx0, fz1-temp), (fx1, fz1-temp),
+                 ((fx0 + fx1) / 2.0, fz0+temp), ((fx0 + fx1) / 2.0, fz1-temp)]
+        LAMP_SPACING = 35.0  # Distance between consecutive street lamps along the block
+        inset = 10.0  # Distance from intersection corners to first street lamp
 
-        # 1. Place lamps along North and South block edges (facing East-West roads)
+        #  Place lamps along North and South block edges
         z_pos = fz0 + inset
         while z_pos <= fz1 - inset:
-            street_lamps.append((fx0, z_pos, 90))  # Left side footpath (arm points right toward road)
-            street_lamps.append((fx1, z_pos, -90))  # Right side footpath (arm points left toward road)
+            street_lamps.append((fx0, z_pos, 90))  # Left side footpath
+            street_lamps.append((fx1, z_pos, -90))  # Right side footpath
             z_pos += LAMP_SPACING
 
-        # 2. Place lamps along East and West block edges (facing North-South roads)
+        #  Place lamps along East and West block edges
         x_pos = fx0 + inset
         while x_pos <= fx1 - inset:
-            street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath (arm points forward toward road)
-            street_lamps.append((x_pos, fz1, 180))  # Top side footpath (arm points backward toward road)
+            street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath
+            street_lamps.append((x_pos, fz1, 180))  # Top side footpath
             x_pos += LAMP_SPACING
 
         # Only generate traffic lights at true road intersections
@@ -195,22 +204,21 @@ def generate_block(bi, bj):
         "trees": trees,
         "lamps": lamps,
         "street_lamps": street_lamps,
-        "traffic_lights": traffic_lights
+        "traffic_lights": traffic_lights,
+        "road_signs": road_signs
     }
 
 
 
 def stream_world(cx, cz):
-    """Make sure every block within VIEW_RADIUS of the camera exists,
-    and forget blocks that are far behind us (classic open-world streaming)."""
 
     ci, cj = camera_block(cx, cz)
-
+    #generates the block around my current block
     for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
         for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
             if (bi, bj) not in block_cache:
                 block_cache[(bi, bj)] = generate_block(bi, bj)
-
+#gets rid of further blocks from the player.keeps upto 3 blocks
     stale = [key for key in block_cache
              if abs(key[0] - ci) > PRUNE_MARGIN or abs(key[1] - cj) > PRUNE_MARGIN]
     for key in stale:
@@ -357,9 +365,8 @@ def draw_lane_markings(ci, cj):
                 glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + lo)
                 glEnd()
 
-
+#make boxes with w,h and d as parameters
 def draw_box(cx, base_y, cz, w, h, d, color):
-    """Axis aligned box. (cx, cz) = center on ground, base_y = bottom Y."""
     x0, x1 = cx - w / 2, cx + w / 2
     y0, y1 = base_y, base_y + h
     z0, z1 = cz - d / 2, cz + d / 2
@@ -372,7 +379,6 @@ def draw_box(cx, base_y, cz, w, h, d, color):
         ((0, 1, 0), [(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)]),  # top
         ((0, -1, 0), [(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)]),  # bottom
     ]
-
     set_env_color(*color)
 
     glBegin(GL_QUADS)
@@ -381,6 +387,70 @@ def draw_box(cx, base_y, cz, w, h, d, color):
         for v in verts:
             glVertex3fv(v)
     glEnd()
+
+#draws text inside the slow sign
+def draw_3d_text(x, y, z, text, color=(0, 0, 0), scale=0.01):
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    glRotatef(180, 0, 1, 0)
+    glColor3f(*color)
+    glScalef(scale, scale, scale)
+
+    for ch in text:
+        glutStrokeCharacter(GLUT_STROKE_ROMAN, ord(ch))
+    glPopMatrix()
+
+#draws the max speed sign near schools and hospitals
+def draw_slow_sign(cx, cz, angle=0):
+    pole = (0.2, 0.2, 0.2)
+    red = (0.9, 0.05, 0.05)
+    white = (1.0, 1.0, 1.0)
+    black = (0.05, 0.05, 0.05)
+
+    glPushMatrix()
+    glTranslatef(cx, 0, cz)
+    glRotatef(angle, 0, 1, 0)
+
+    # Pole
+    draw_box(0, 0, 0, 0.8, 4, 0.2, pole)
+
+    # Top red banner
+    draw_box(0, 5.6, 0, 2.5, 0.5, 0.2, red)
+
+    # Speed-limit sign
+    draw_box(0, 3.2, 0, 4.5, 2.8, 0.2, red)
+
+    # White inner area both front and back
+    draw_box(0, 3.2, -0.12, 3.8, 2.4, 0.03, white)
+    draw_box(0, 3.2, 0.12, 3.8, 2.4, 0.03, white)
+
+    # Max Speed & 20  both front and back side
+    draw_3d_text(
+        1.7, 4.9, -0.25,
+        "Max Speed",
+        color=black,
+        scale=0.005)
+    draw_3d_text(
+        0.7, 3.5, -0.25,
+        "20",
+        color=black,
+        scale=0.012)
+
+    glPushMatrix()
+    glRotatef(180, 0, 1, 0)
+    draw_3d_text(
+        1.7, 4.9, -0.25,
+        "Max Speed",
+        color=black,
+        scale=0.005)
+    draw_3d_text(
+        0.7, 3.5, -0.25,
+        "20",
+        color=black,
+        scale=0.012)
+    glPopMatrix()
+
+    glPopMatrix()
 
 
 def draw_hospital(cx, cz):
@@ -425,7 +495,6 @@ def draw_hospital(cx, cz):
     draw_tree(cx - 50, cz + 5, 5, "round")
 
 
-
 def draw_school(cx, cz):
     brick = (0.65, 0.3, 0.2)
     white = (0.9, 0.85, 0.7)
@@ -435,7 +504,7 @@ def draw_school(cx, cz):
 
     # Scale school around its center
     glTranslatef(cx, 0, cz)
-    glScalef(2, 2, 2)
+    glScalef(2.5, 2.5, 2.5)
     glTranslatef(-cx, 0, -cz)
 
     draw_box(cx, 0, cz, 30, 8, 14, brick)
@@ -452,10 +521,10 @@ def draw_school(cx, cz):
     draw_tree(cx + 50, cz + 4, 5, "round")
 
 
+
+#lines on roads
 def draw_intersections(ci, cj):
-    """Zebra crossings + stop lines on every approach of every visible
-    intersection -- this is where the 'four turns' happen (straight,
-    left, right or a U-turn) at every single junction in the grid."""
+    #Zebra crossings + stop lines on every approach of every visible intersection of roads
 
     stripe_w, stripe_len, gap = 0.6, ROAD_WIDTH - 2.0, 0.6
     inset = ROAD_WIDTH / 2.0 + 0.6
@@ -489,6 +558,7 @@ def draw_intersections(ci, cj):
                         glVertex3f(gx - stripe_w / 2, 0.03, gz + 0.6)
                         glEnd()
 
+#if the trafficlight is green red or yellow
 def get_traffic_states():
     TRAFFIC_GREEN_TIME = 6
     TRAFFIC_YELLOW_TIME = 3
@@ -503,7 +573,7 @@ def get_traffic_states():
         return "yellow"
     else:
         return "red"
-# ---------------- scenery ----------------
+
 
 def draw_tree(x, z, height, kind):
     glPushMatrix()
@@ -566,25 +636,25 @@ def draw_windows(hw, hd, h, seed):
 def draw_building(x, z, w, d, h, color, win_seed):
     glPushMatrix()
     glTranslatef(x, 0, z)
-    hw, hd = w / 2.0, d / 2.0
 
-    set_env_color(*color)
-    glBegin(GL_QUADS)
-    glVertex3f(-hw, 0, hd); glVertex3f(hw, 0, hd); glVertex3f(hw, h, hd); glVertex3f(-hw, h, hd)
-    glVertex3f(hw, 0, -hd); glVertex3f(-hw, 0, -hd); glVertex3f(-hw, h, -hd); glVertex3f(hw, h, -hd)
-    glVertex3f(-hw, 0, -hd); glVertex3f(-hw, 0, hd); glVertex3f(-hw, h, hd); glVertex3f(-hw, h, -hd)
-    glVertex3f(hw, 0, hd); glVertex3f(hw, 0, -hd); glVertex3f(hw, h, -hd); glVertex3f(hw, h, hd)
-    glEnd()
+    # Main building body
+    draw_box(0, 0, 0, w, h, d, color)
 
+    # Roof
     roof_color = tuple(min(1.0, c * 0.75) for c in color)
     set_env_color(*roof_color)
+
     glBegin(GL_QUADS)
-    glVertex3f(-hw, h, -hd); glVertex3f(hw, h, -hd); glVertex3f(hw, h, hd); glVertex3f(-hw, h, hd)
+    glVertex3f(-w/2, h, -d/2)
+    glVertex3f(w/2, h, -d/2)
+    glVertex3f(w/2, h, d/2)
+    glVertex3f(-w/2, h, d/2)
     glEnd()
 
-    draw_windows(hw, hd, h, win_seed)
-    glPopMatrix()
+    # Windows
+    draw_windows(w/2, d/2, h, win_seed)
 
+    glPopMatrix()
 
 def draw_lamp(x, z):
     glPushMatrix()
@@ -816,6 +886,8 @@ def draw_world(ci, cj):
                 draw_Street_lamp(x, z, angle)
             for (x, z,rotation )in block["traffic_lights"]:
                 draw_traffic_light(x,z,rotation,get_traffic_states())
+            for (x, z, angle) in block["road_signs"]:
+                draw_slow_sign(x, z, angle)
 
 
 def lerp(a, b, t):
