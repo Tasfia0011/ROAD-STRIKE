@@ -94,6 +94,7 @@ def generate_block(bi, bj):
     street_lamps=[]
     traffic_lights = []
     road_signs=[]
+    garage=[]
 
     # inward block corners
     fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
@@ -108,7 +109,7 @@ def generate_block(bi, bj):
     # it decides will it generate hospita or school or a block of buildings near intersection
     landmark_roll = rnd.random() if borders_road else 1.0
 
-    if landmark_roll < 0.07:
+    if landmark_roll < 0.05:
         # Spawn a Hospital in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
@@ -120,7 +121,7 @@ def generate_block(bi, bj):
         road_signs.append((fx0 , fz1-5 , 0))
         road_signs.append((fx1, fz1-5, 0))
 
-    elif landmark_roll < 0.14:
+    elif landmark_roll < 0.1:
         # Spawn a School in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
@@ -131,6 +132,14 @@ def generate_block(bi, bj):
         road_signs.append((fx1, fz0 + 5, 0))
         road_signs.append((fx0, fz1 - 5, 0))
         road_signs.append((fx1, fz1 - 5, 0))
+
+
+    elif landmark_roll < 0.13:
+        # Spawn a Garage in the center of the block
+        x = (bx0 + bx1) / 2.0
+        z = (bz0 + bz1) / 2.0
+        garage.append((x, z, 28.0, 16.0, 10.0))  # Long and low-rise structure
+
     else:
         #divides each block in smaller blocks with rows and cols
         #each smaller blocks contains either tree/building/open space
@@ -205,7 +214,8 @@ def generate_block(bi, bj):
         "lamps": lamps,
         "street_lamps": street_lamps,
         "traffic_lights": traffic_lights,
-        "road_signs": road_signs
+        "road_signs": road_signs,
+        "garage": garage
     }
 
 
@@ -389,10 +399,10 @@ def draw_box(cx, base_y, cz, w, h, d, color):
     glEnd()
 
 #draws text inside the slow sign
-def draw_3d_text(x, y, z, text, color=(0, 0, 0), scale=0.01):
+def draw_3d_text(x, y, z, text, color=(0, 0, 0), scale=0.01,angle=0):
     glPushMatrix()
     glTranslatef(x, y, z)
-    glRotatef(180, 0, 1, 0)
+    glRotatef(angle, 0, 1, 0)
     glColor3f(*color)
     glScalef(scale, scale, scale)
 
@@ -429,12 +439,12 @@ def draw_slow_sign(cx, cz, angle=0):
         1.7, 4.9, -0.25,
         "Max Speed",
         color=black,
-        scale=0.005)
+        scale=0.005,angle=180)
     draw_3d_text(
         0.7, 3.5, -0.25,
         "20",
         color=black,
-        scale=0.012)
+        scale=0.012,angle=180)
 
     glPushMatrix()
     glRotatef(180, 0, 1, 0)
@@ -442,12 +452,12 @@ def draw_slow_sign(cx, cz, angle=0):
         1.7, 4.9, -0.25,
         "Max Speed",
         color=black,
-        scale=0.005)
+        scale=0.005,angle=180)
     draw_3d_text(
         0.7, 3.5, -0.25,
         "20",
         color=black,
-        scale=0.012)
+        scale=0.012,angle=180)
     glPopMatrix()
 
     glPopMatrix()
@@ -460,7 +470,7 @@ def draw_hospital(cx, cz):
     glPushMatrix()
 
     glTranslatef(cx, 0, cz)
-    glScalef(2.4, 2.4, 2.4)
+    glScalef(1.4, 1.4, 1.4)
     glTranslatef(-cx, 0, -cz)
 
     # Main building
@@ -487,6 +497,18 @@ def draw_hospital(cx, cz):
     draw_box(cx - 7.05, 13.5, cz, 0.1, 1.0, 5, red)
     draw_box(cx - 7.05, 11.5, cz, 0.1, 5, 1.2, red)
 
+#writing of hospital
+    # Front (+Z)
+    draw_3d_text(cx, 5, cz + 8.1, "HOSPITAL", red, 0.012, 0)
+
+    # Back (-Z)
+    draw_3d_text(cx, 5, cz - 8.1, "HOSPITAL", red, 0.012, 180)
+
+    # Right (+X)
+    draw_3d_text(cx + 12.1, 5, cz, "HOSPITAL", red, 0.012, 90)
+
+    # Left (-X)
+    draw_3d_text(cx - 12.1, 5, cz, "HOSPITAL", red, 0.012, 270)
     glPopMatrix()
 
     # Trees
@@ -512,6 +534,19 @@ def draw_school(cx, cz):
     draw_box(cx, 3.5, cz + 7.1, 24, 3, 0.1, blue)
     draw_box(cx, 0, cz + 7.2, 4, 4, 0.2, white)
 
+    # Writing of SCHOOL
+
+    # Front (+Z)
+    draw_3d_text(cx, 4, cz + 7.1, "SCHOOL", white, 0.012, 0)
+
+    # Back (-Z)
+    draw_3d_text(cx, 4, cz - 7.1, "SCHOOL", white, 0.012, 180)
+
+    # Right (+X)
+    draw_3d_text(cx + 15.1, 4, cz, "SCHOOL", white, 0.012, 90)
+
+    # Left (-X)
+    draw_3d_text(cx - 15.1, 4, cz, "SCHOOL", white, 0.012, 270)
     glPopMatrix()
 
     # Trees
@@ -520,7 +555,51 @@ def draw_school(cx, cz):
     draw_tree(cx - 50, cz + 4, 5, "round")
     draw_tree(cx + 50, cz + 4, 5, "round")
 
+#garage
+def draw_garage(cx, cz):
+    gray = (0.35, 0.35, 0.35)
+    dark_gray = (0.15, 0.15, 0.15)
+    white = (0.9, 0.9, 0.9)
+    yellow = (0.9, 0.7, 0.05)
 
+    glPushMatrix()
+
+    # Scale garage around its center
+    glTranslatef(cx, 0, cz)
+    glScalef(2.0, 2.0, 2.0)
+    glTranslatef(-cx, 0, -cz)
+
+    # Main garage
+    draw_box(cx, 0, cz, 24, 10, 18, gray)
+
+    # Roof
+    draw_box(cx, 10, cz, 26, 1, 20, dark_gray)
+
+    # Front garage door (+Z)
+    draw_box(cx, 5, cz + 9.1, 16, 8, 0.2, dark_gray)
+
+    # Garage door horizontal lines
+    for y in [2, 4, 6, 8]:
+        draw_box(cx, y, cz + 9.25, 15.5, 0.15, 0.1, white)
+
+    # GARAGE text - 4 sides
+    # Front (+Z)
+    draw_3d_text(cx - 4, 6.5, cz + 9.2,"GARAGE", yellow, 0.016, 0)
+
+    # Back (-Z)
+    draw_3d_text(cx + 4, 6.5, cz - 9.2,"GARAGE", yellow, 0.016, 180)
+
+    # Right (+X)
+    draw_3d_text(cx + 12.1, 6.5, cz + 4,"GARAGE", yellow, 0.016, 90)
+
+    # Left (-X)
+    draw_3d_text(cx - 12.1, 6.5, cz - 4,"GARAGE", yellow, 0.016, 270)
+    glPopMatrix()
+
+    draw_tree(cx - 50, cz - 4, 6, "round")
+    draw_tree(cx + 50, cz - 4, 6, "round")
+    draw_tree(cx - 50, cz + 4, 5, "round")
+    draw_tree(cx + 50, cz + 4, 5, "round")
 
 #lines on roads
 def draw_intersections(ci, cj):
@@ -888,6 +967,8 @@ def draw_world(ci, cj):
                 draw_traffic_light(x,z,rotation,get_traffic_states())
             for (x, z, angle) in block["road_signs"]:
                 draw_slow_sign(x, z, angle)
+            for (x, z, w, d, h) in block.get("garage", []):
+                draw_garage(x, z)
 
 
 def lerp(a, b, t):
