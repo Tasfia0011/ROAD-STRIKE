@@ -12,9 +12,13 @@ game_state = "PLAYING"
 # Button rectangles in screen pixels (x1, y1, x2, y2) — recalculated each resize
 resume_btn = (0, 0, 0, 0)
 quit_btn   = (0, 0, 0, 0)
-# ---------------- camera ----------------
-cam_x, cam_z = 0.0, 15.0     # camera position
-cam_angle = 0.0              # left/right turn angle in degrees
+# ---------------- camera & vehicle mode ----------------
+car_x, car_z = 0.0, 0.0      # car position in world space
+cam_x, cam_z = 0.0, 15.0     # camera position in world space
+cam_angle = 0.0              # fixed camera angle facing straight forward
+camera_mode = "3rd"          # "3rd" (3rd person view) or "1st" (1st person simulator view)
+current_rpm = 900.0          # Current engine RPM (800 - 8000 RPM)
+steering_wheel_angle = 0.0   # Visual steering wheel angle in FPV
 
 # ---------------- Rain System ----------------
 RAIN_COUNT = 1000 #number of raindrops stored
@@ -23,16 +27,17 @@ is_raining = False
 last_rain_toggle = time.time() #duration between each rain
 
 car_speed = 0.0
-max_speed = 40.0         # Top forward speed (units/sec)
-max_reverse_speed = -15.0 # Top reverse speed (units/sec)
-acceleration = 30.0      # How fast speed builds up (units/sec^2)
-deceleration = 10.0      # Coasting friction when no key is held
-steering_speed = 50.0    # Turn rate (degrees/sec)
+max_speed = 300.0         # Top forward speed (0 - 300 km/h)
+max_reverse_speed = -60.0 # Top reverse speed (km/h)
+acceleration = 70.0       # Acceleration build up rate
+deceleration = 25.0       # Coasting friction when no drive key is held
+steering_speed = 35.0     # Sideways car movement speed (units/sec)
 
-INTERSECTION_INTERVAL = 4  # Road intersections every 4 blocks
+INTERSECTION_INTERVAL = 1  # Continuous road grid on every block
+ROAD_DRAW_RADIUS = 2       # Optimal road rendering radius for fast 60+ FPS performance
 
-# Input tracking
-key_states = {'w': False, 's': False, 'a': False, 'd': False} #keeps track of which movement buttons are being pressed
+# Input tracking for WASD and 4 Arrow keys
+key_states = {'w': False, 's': False, 'a': False, 'd': False, 'up': False, 'down': False, 'left': False, 'right': False}
 last_frame_time = time.time()
 
 # ---------------- world / road-grid data ----------------
@@ -46,7 +51,7 @@ BLOCK_MARGIN = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH   # gap before buildable land s
 
 
 VIEW_RADIUS = 1                 # how many blocks out (in every direction) get streamed in
-PRUNE_MARGIN = VIEW_RADIUS + 2    # cached blocks further than this get dropped
+PRUNE_MARGIN = VIEW_RADIUS + 2    # cached blocks further than this get droppeded
 
 # cache of generated blocks: {(bi, bj): {"trees": [...], "buildings": [...], "lamps": [...]}}
 block_cache = {}
@@ -320,7 +325,7 @@ def point_in_rect(px, py, rect):
 # ---------------- ground / road / footpaths ----------------
 
 def draw_ground(cx, cz):
-    size = CELL_SIZE * (VIEW_RADIUS + 3)
+    size = CELL_SIZE * (ROAD_DRAW_RADIUS + 3)
     set_env_color(0.30, 0.55, 0.25)
     glBegin(GL_QUADS)
     glVertex3f(cx - size, 0, cz + size)
@@ -333,12 +338,12 @@ def draw_ground(cx, cz):
 def draw_footpaths(ci, cj):
     global INTERSECTION_INTERVAL
     half = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH
-    lo = -(VIEW_RADIUS + 1) * CELL_SIZE
-    hi = (VIEW_RADIUS + 1) * CELL_SIZE
+    lo = -(ROAD_DRAW_RADIUS + 2) * CELL_SIZE
+    hi = (ROAD_DRAW_RADIUS + 2) * CELL_SIZE
 
     set_env_color(0.45, 0.45, 0.45)
 
-    for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
+    for i in range(ci - ROAD_DRAW_RADIUS - 1, ci + ROAD_DRAW_RADIUS + 2):
         if i % INTERSECTION_INTERVAL == 0:
             x = i * CELL_SIZE
             glBegin(GL_QUADS)
@@ -347,7 +352,7 @@ def draw_footpaths(ci, cj):
             glVertex3f(x + half, 0.015, cj * CELL_SIZE + lo)
             glVertex3f(x - half, 0.015, cj * CELL_SIZE + lo)
             glEnd()
-    for j in range(cj - VIEW_RADIUS - 1, cj + VIEW_RADIUS + 2):
+    for j in range(cj - ROAD_DRAW_RADIUS - 1, cj + ROAD_DRAW_RADIUS + 2):
         if j % INTERSECTION_INTERVAL == 0:
             z = j * CELL_SIZE
             glBegin(GL_QUADS)
@@ -360,14 +365,16 @@ def draw_footpaths(ci, cj):
 
 def draw_roads(ci, cj):
     half = ROAD_WIDTH / 2.0
-    lo = -(VIEW_RADIUS + 1) * CELL_SIZE
-    hi = (VIEW_RADIUS + 1) * CELL_SIZE
+    lo = -(ROAD_DRAW_RADIUS + 1) * CELL_SIZE
+    hi = (ROAD_DRAW_RADIUS + 1) * CELL_SIZE
 
-    # asphalt strips: every road running north-south (varying x) and
-    # every road running east-west (varying z) -- together they form a
-    # full grid of 4-way intersections, i.e. turns everywhere you look.
-    set_env_color(0.15, 0.15, 0.15)
-    for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
+    # Disable FOG so light blue fog never tints the black road
+    glDisable(GL_FOG)
+
+    # Pure 100% pitch black asphalt
+    set_env_color(0.01, 0.01, 0.01)
+
+    for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
         if i % INTERSECTION_INTERVAL == 0:
             x = i * CELL_SIZE
             glBegin(GL_QUADS)
@@ -376,7 +383,7 @@ def draw_roads(ci, cj):
             glVertex3f(x + half, 0.02, cj * CELL_SIZE + lo)
             glVertex3f(x - half, 0.02, cj * CELL_SIZE + lo)
             glEnd()
-    for j in range(cj - VIEW_RADIUS - 1, cj + VIEW_RADIUS + 2):
+    for j in range(cj - ROAD_DRAW_RADIUS, cj + ROAD_DRAW_RADIUS + 1):
         if j % INTERSECTION_INTERVAL == 0:
             z = j * CELL_SIZE
             glBegin(GL_QUADS)
@@ -389,16 +396,18 @@ def draw_roads(ci, cj):
     draw_lane_markings(ci, cj)
     draw_intersections(ci, cj)
 
+    glEnable(GL_FOG)  # Re-enable FOG for background scenery
+
 
 def draw_lane_markings(ci, cj):
-    dash_len, gap_len = 2.0, 2.0
+    dash_len, gap_len = 4.0, 4.0
     step = dash_len + gap_len
-    lo = -(VIEW_RADIUS + 1) * CELL_SIZE
-    hi = (VIEW_RADIUS + 1) * CELL_SIZE
+    lo = -(ROAD_DRAW_RADIUS + 1) * CELL_SIZE
+    hi = (ROAD_DRAW_RADIUS + 1) * CELL_SIZE
 
     # dashed centre line along every north-south road
     glColor3f(1.0, 1.0, 1.0)
-    for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
+    for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
         if i % INTERSECTION_INTERVAL == 0:
             x = i * CELL_SIZE
             z = math.floor((cj * CELL_SIZE + hi) / step) * step
@@ -413,7 +422,7 @@ def draw_lane_markings(ci, cj):
                 z -= step
 
     # dashed centre line along every east-west road
-    for j in range(cj - VIEW_RADIUS - 1, cj + VIEW_RADIUS + 2):
+    for j in range(cj - ROAD_DRAW_RADIUS, cj + ROAD_DRAW_RADIUS + 1):
         if j % INTERSECTION_INTERVAL == 0:
             z = j * CELL_SIZE
             x = math.floor((ci * CELL_SIZE + hi) / step) * step
@@ -430,7 +439,7 @@ def draw_lane_markings(ci, cj):
     # yellow kerb/edge lines running the length of every road
     glColor3f(0.95, 0.85, 0.2)
     half = ROAD_WIDTH / 2.0 - 0.15
-    for i in range(ci - VIEW_RADIUS - 1, ci + VIEW_RADIUS + 2):
+    for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
         if i % INTERSECTION_INTERVAL == 0:
             x = i * CELL_SIZE
             for side in (-1, 1):
@@ -676,10 +685,10 @@ def draw_intersections(ci, cj):
     inset = ROAD_WIDTH / 2.0 + 0.6
 
     glColor3f(0.95, 0.95, 0.9)
-    for i in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
+    for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
         if i % INTERSECTION_INTERVAL != 0:
             continue
-        for j in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
+        for j in range(cj - ROAD_DRAW_RADIUS, cj + ROAD_DRAW_RADIUS + 1):
             if j % INTERSECTION_INTERVAL != 0:
                 continue
             x, z = i * CELL_SIZE, j * CELL_SIZE
@@ -1093,12 +1102,370 @@ def mouse(button, state, x, y):
     elif point_in_rect(x, gl_y, quit_btn):
         glutLeaveMainLoop()
 
+# ---------------- HUD & Dashboard Helper Functions ----------------
+
+def draw_hud_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=1.0):
+    glColor3f(r, g, b)
+    glRasterPos2f(x, y)
+    for ch in text:
+        glutBitmapCharacter(font, ord(ch))
+
+
+def draw_hud_circle(cx, cy, radius, num_segments=36, fill=False, r=1.0, g=1.0, b=1.0, alpha=1.0):
+    glColor4f(r, g, b, alpha)
+    if fill:
+        glBegin(GL_TRIANGLE_FAN)
+        glVertex2f(cx, cy)
+    else:
+        glBegin(GL_LINE_LOOP)
+    for i in range(num_segments + 1):
+        ang = (2.0 * math.pi * i) / num_segments
+        glVertex2f(cx + math.cos(ang) * radius, cy + math.sin(ang) * radius)
+    glEnd()
+
+
+# ---------------- 3D Car Model ----------------
+
+def draw_3d_car(cx, cz, angle):
+    glPushMatrix()
+    glTranslatef(cx, 0.2, cz)
+    glRotatef(angle, 0, 1, 0)
+
+    # 1. Main Chassis / Body (Glossy Red / Crimson)
+    draw_box(0, 0.4, 0, 3.2, 0.9, 6.0, (0.85, 0.1, 0.15))
+
+    # 2. Lower skirts / Front & Rear Bumper
+    draw_box(0, 0.15, 0, 3.3, 0.35, 6.2, (0.15, 0.15, 0.15))
+
+    # 3. Upper Cabin Roof Pillars & Open Frame (Glass removed)
+    draw_box(0, 1.65, -1.3, 2.5, 0.2, 0.2, (0.1, 0.1, 0.15))   # Front windshield top frame bar
+    draw_box(-1.25, 1.35, -0.4, 0.15, 0.8, 2.0, (0.1, 0.1, 0.15)) # Left side door frame
+    draw_box(1.25, 1.35, -0.4, 0.15, 0.8, 2.0, (0.1, 0.1, 0.15))  # Right side door frame
+    draw_box(0, 1.65, 1.2, 2.5, 0.2, 0.2, (0.1, 0.1, 0.15))    # Rear top frame bar
+
+    # 4. 3D Driver / Player Character inside Car (Driver seat left side)
+    quad = gluNewQuadric()
+
+    # Driver Seat & Torso (Blue sports jacket)
+    draw_box(-0.55, 1.05, 0.1, 0.7, 0.7, 0.5, (0.2, 0.35, 0.8))
+
+    # Driver Head (Skin tone)
+    glPushMatrix()
+    glTranslatef(-0.55, 1.55, 0.1)
+    glColor3f(0.95, 0.75, 0.6)
+    gluSphere(quad, 0.32, 10, 10)
+    glPopMatrix()
+
+    # Driver Cap / Hair (Dark cap)
+    glPushMatrix()
+    glTranslatef(-0.55, 1.72, 0.08)
+    glColor3f(0.12, 0.12, 0.15)
+    gluSphere(quad, 0.30, 8, 8)
+    glPopMatrix()
+
+    # Driver Arms (Skin tone extending forward to steering wheel)
+    draw_box(-0.55, 1.2, -0.35, 0.55, 0.15, 0.5, (0.95, 0.75, 0.6))
+
+    # Interior 3D Steering Wheel
+    glPushMatrix()
+    glTranslatef(-0.55, 1.25, -0.65)
+    glColor3f(0.15, 0.15, 0.18)
+    gluCylinder(quad, 0.3, 0.3, 0.1, 10, 1)
+    glPopMatrix()
+
+    # Side Mirrors (towards front -Z)
+    draw_box(-1.6, 1.25, -0.8, 0.35, 0.2, 0.4, (0.1, 0.1, 0.12))
+    draw_box(1.6, 1.25, -0.8, 0.35, 0.2, 0.4, (0.1, 0.1, 0.12))
+
+    # 5. Front Headlights (facing -Z, bright white/yellow)
+    glColor3f(1.0, 1.0, 0.85)
+    for side in (-1.1, 1.1):
+        glPushMatrix()
+        glTranslatef(side, 0.65, -3.01)
+        glutSolidCube(0.4)
+        glPopMatrix()
+
+    # 6. Rear Taillights (facing +Z, glowing red)
+    glColor3f(1.0, 0.05, 0.05)
+    for side in (-1.1, 1.1):
+        glPushMatrix()
+        glTranslatef(side, 0.65, 3.01)
+        glutSolidCube(0.4)
+        glPopMatrix()
+
+    # 7. Wheels (4 Corners)
+    wheel_pos = [(-1.6, 0.45, -1.8), (1.6, 0.45, -1.8), (-1.6, 0.45, 1.8), (1.6, 0.45, 1.8)]
+    for wx, wy, wz in wheel_pos:
+        glPushMatrix()
+        glTranslatef(wx, wy, wz)
+        glRotatef(90 if wx > 0 else -90, 0, 1, 0)
+        glColor3f(0.12, 0.12, 0.14)
+        gluCylinder(quad, 0.5, 0.5, 0.4, 14, 1)
+        # Wheel Rim Cap
+        glColor3f(0.7, 0.7, 0.75)
+        gluSphere(quad, 0.3, 10, 10)
+        glPopMatrix()
+
+    gluDeleteQuadric(quad)
+    glPopMatrix()
+
+
+# ---------------- Simulator Car Dashboard Overlay ----------------
+
+def draw_dashboard():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
+
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_FOG)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    # 1. Main Dashboard Base Housing
+    dash_h = WINDOW_HEIGHT * 0.38
+    glColor4f(0.02, 0.02, 0.02, 0.95)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0)
+    glVertex2f(WINDOW_WIDTH, 0)
+    glVertex2f(WINDOW_WIDTH, dash_h)
+    glVertex2f(0, dash_h)
+    glEnd()
+
+    # Top Frame Line in Yellow
+    glColor3f(1.0, 1.0, 0.0)
+    glLineWidth(2.0)
+    glBegin(GL_LINE_STRIP)
+    glVertex2f(0, dash_h * 0.7)
+    glVertex2f(WINDOW_WIDTH * 0.15, dash_h)
+    glVertex2f(WINDOW_WIDTH * 0.85, dash_h)
+    glVertex2f(WINDOW_WIDTH, dash_h * 0.7)
+    glEnd()
+
+    cx_speed = WINDOW_WIDTH * 0.28
+    cy_speed = WINDOW_HEIGHT * 0.20
+    R_speed = min(WINDOW_WIDTH, WINDOW_HEIGHT) * 0.17
+
+    cx_rpm = WINDOW_WIDTH * 0.72
+    cy_rpm = WINDOW_HEIGHT * 0.20
+    R_rpm = R_speed
+
+    # 2. SPEEDOMETER DIAL (LEFT)
+    # Solid Black Circle Background with Yellow Outline
+    draw_hud_circle(cx_speed, cy_speed, R_speed, fill=True, r=0.0, g=0.0, b=0.0, alpha=1.0)
+    draw_hud_circle(cx_speed, cy_speed, R_speed, fill=False, r=1.0, g=1.0, b=0.0, alpha=1.0)
+
+    # Speedometer Scale: Exactly 16 numbers starting from 0 to 300 (gap of 20) in YELLOW
+    for i in range(16):
+        val = i * 20
+        ang_deg = 225.0 - i * 18.0
+        ang_rad = math.radians(ang_deg)
+
+        tx1 = cx_speed + math.cos(ang_rad) * (R_speed * 0.84)
+        ty1 = cy_speed + math.sin(ang_rad) * (R_speed * 0.84)
+        tx2 = cx_speed + math.cos(ang_rad) * (R_speed * 0.96)
+        ty2 = cy_speed + math.sin(ang_rad) * (R_speed * 0.96)
+
+        glColor3f(1.0, 1.0, 0.0)
+        glLineWidth(2.0)
+        glBegin(GL_LINES)
+        glVertex2f(tx1, ty1)
+        glVertex2f(tx2, ty2)
+        glEnd()
+
+        if i < 15:
+            ang_mid = math.radians(225.0 - (i + 0.5) * 18.0)
+            mx1 = cx_speed + math.cos(ang_mid) * (R_speed * 0.89)
+            my1 = cy_speed + math.sin(ang_mid) * (R_speed * 0.89)
+            mx2 = cx_speed + math.cos(ang_mid) * (R_speed * 0.96)
+            my2 = cy_speed + math.sin(ang_mid) * (R_speed * 0.96)
+            glColor3f(0.8, 0.8, 0.0)
+            glLineWidth(1.0)
+            glBegin(GL_LINES)
+            glVertex2f(mx1, my1)
+            glVertex2f(mx2, my2)
+            glEnd()
+
+        text_str = str(val)
+        offset_x = 12 if val >= 100 else (8 if val >= 10 else 4)
+        nx = cx_speed + math.cos(ang_rad) * (R_speed * 0.68) - offset_x
+        ny = cy_speed + math.sin(ang_rad) * (R_speed * 0.68) - 6
+        # YELLOW Colored Numbers
+        draw_hud_text(nx, ny, text_str, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+
+    # Speedometer RED Indicator Pointer Stick
+    sp_ratio = min(300.0, max(0.0, abs(car_speed))) / 300.0
+    needle_ang = math.radians(225.0 - sp_ratio * 270.0)
+    nx_sp = cx_speed + math.cos(needle_ang) * (R_speed * 0.88)
+    ny_sp = cy_speed + math.sin(needle_ang) * (R_speed * 0.88)
+
+    # Bright RED Pointer Stick
+    glColor3f(1.0, 0.0, 0.0)
+    glLineWidth(4.0)
+    glBegin(GL_LINES)
+    glVertex2f(cx_speed, cy_speed)
+    glVertex2f(nx_sp, ny_sp)
+    glEnd()
+
+    draw_hud_circle(cx_speed, cy_speed, 8, fill=True, r=0.1, g=0.1, b=0.1)
+    draw_hud_circle(cx_speed, cy_speed, 5, fill=True, r=1.0, g=0.0, b=0.0)
+
+    # Parking Indicator (P) in Yellow
+    draw_hud_text(cx_speed - 10, cy_speed - R_speed * 0.55, "(P)", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+
+
+    # 3. WORKING TACHOMETER / RPM METER DIAL (RIGHT)
+    # Solid Black Circle Background with Yellow Outline
+    draw_hud_circle(cx_rpm, cy_rpm, R_rpm, fill=True, r=0.0, g=0.0, b=0.0, alpha=1.0)
+    draw_hud_circle(cx_rpm, cy_rpm, R_rpm, fill=False, r=1.0, g=1.0, b=0.0, alpha=1.0)
+
+    # RPM Scale: 0 to 8 (x1000 RPM) in YELLOW
+    for i in range(9):
+        ang_deg = 210.0 - i * 30.0
+        ang_rad = math.radians(ang_deg)
+
+        tx1 = cx_rpm + math.cos(ang_rad) * (R_rpm * 0.84)
+        ty1 = cy_rpm + math.sin(ang_rad) * (R_rpm * 0.84)
+        tx2 = cx_rpm + math.cos(ang_rad) * (R_rpm * 0.96)
+        ty2 = cy_rpm + math.sin(ang_rad) * (R_rpm * 0.96)
+
+        glColor3f(1.0, 0.2, 0.0) if i >= 6 else glColor3f(1.0, 1.0, 0.0)
+        glLineWidth(2.5 if i >= 6 else 2.0)
+        glBegin(GL_LINES)
+        glVertex2f(tx1, ty1)
+        glVertex2f(tx2, ty2)
+        glEnd()
+
+        if i < 8:
+            ang_mid = math.radians(210.0 - (i + 0.5) * 30.0)
+            mx1 = cx_rpm + math.cos(ang_mid) * (R_rpm * 0.89)
+            my1 = cy_rpm + math.sin(ang_mid) * (R_rpm * 0.89)
+            mx2 = cx_rpm + math.cos(ang_mid) * (R_rpm * 0.96)
+            my2 = cy_rpm + math.sin(ang_mid) * (R_rpm * 0.96)
+            glColor3f(0.8, 0.8, 0.0)
+            glLineWidth(1.0)
+            glBegin(GL_LINES)
+            glVertex2f(mx1, my1)
+            glVertex2f(mx2, my2)
+            glEnd()
+
+        # YELLOW Colored Numbers (0 to 8)
+        nx = cx_rpm + math.cos(ang_rad) * (R_rpm * 0.68) - 5
+        ny = cy_rpm + math.sin(ang_rad) * (R_rpm * 0.68) - 6
+        draw_hud_text(nx, ny, str(i), font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+
+    # RPM Working RED Indicator Pointer Stick
+    rpm_ratio = min(8000.0, max(0.0, current_rpm)) / 8000.0
+    needle_ang_rpm = math.radians(210.0 - rpm_ratio * 240.0)
+    nx_rpm = cx_rpm + math.cos(needle_ang_rpm) * (R_rpm * 0.88)
+    ny_rpm = cy_rpm + math.sin(needle_ang_rpm) * (R_rpm * 0.88)
+
+    # Bright RED Pointer Stick
+    glColor3f(1.0, 0.0, 0.0)
+    glLineWidth(4.0)
+    glBegin(GL_LINES)
+    glVertex2f(cx_rpm, cy_rpm)
+    glVertex2f(nx_rpm, ny_rpm)
+    glEnd()
+
+    draw_hud_circle(cx_rpm, cy_rpm, 8, fill=True, r=0.1, g=0.1, b=0.1)
+    draw_hud_circle(cx_rpm, cy_rpm, 5, fill=True, r=1.0, g=0.0, b=0.0)
+
+    # Warning Icon (!) in Yellow
+    draw_hud_text(cx_rpm - 8, cy_rpm - R_rpm * 0.55, "(!)", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+
+
+    # 4. CENTER DIGITAL DISPLAY & TURN INDICATORS
+    cx_mid = WINDOW_WIDTH * 0.5
+    cy_mid = cy_speed
+
+    glColor4f(0.8, 0.8, 0.0, 0.8)
+    glLineWidth(2.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(cx_mid - 80, cy_mid - 40)
+    glVertex2f(cx_mid + 80, cy_mid - 40)
+    glVertex2f(cx_mid + 80, cy_mid + 70)
+    glVertex2f(cx_mid - 80, cy_mid + 70)
+    glEnd()
+
+    left_turn = key_states['a'] or key_states['left']
+    right_turn = key_states['d'] or key_states['right']
+
+    r_l, g_l, b_l = (1.0, 1.0, 0.0) if left_turn else (0.3, 0.3, 0.0)
+    r_r, g_r, b_r = (1.0, 1.0, 0.0) if right_turn else (0.3, 0.3, 0.0)
+
+    draw_hud_text(cx_mid - 65, cy_mid + 45, "<--", font=GLUT_BITMAP_HELVETICA_18, r=r_l, g=g_l, b=b_l)
+    draw_hud_text(cx_mid + 40, cy_mid + 45, "-->", font=GLUT_BITMAP_HELVETICA_18, r=r_r, g=g_r, b=b_r)
+
+    speed_text = f"{int(abs(car_speed))} KM/H"
+    gear_text = "D" if car_speed >= 0 else "R"
+    odo_text = f"165376"
+
+    draw_hud_text(cx_mid - 35, cy_mid + 20, speed_text, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+    draw_hud_text(cx_mid - 8, cy_mid - 5, gear_text, font=GLUT_BITMAP_TIMES_ROMAN_24, r=1.0, g=0.0, b=0.0)
+    draw_hud_text(cx_mid - 30, cy_mid - 30, odo_text, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+
+
+    # 5. AUXILIARY FUEL GAUGE (TEMP GAUGE REMOVED)
+    cx_fuel = cx_speed - R_speed * 1.35
+    cy_fuel = cy_speed - R_speed * 0.15
+    R_sub = R_speed * 0.45
+
+    draw_hud_circle(cx_fuel, cy_fuel, R_sub, fill=True, r=0.0, g=0.0, b=0.0, alpha=1.0)
+    draw_hud_circle(cx_fuel, cy_fuel, R_sub, fill=False, r=1.0, g=1.0, b=0.0, alpha=1.0)
+    draw_hud_text(cx_fuel - 14, cy_fuel - R_sub * 0.6, "FUEL", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
+    glColor3f(1.0, 0.0, 0.0)
+    glLineWidth(2.5)
+    glBegin(GL_LINES)
+    glVertex2f(cx_fuel, cy_fuel)
+    glVertex2f(cx_fuel - R_sub * 0.5, cy_fuel + R_sub * 0.6)
+    glEnd()
+
+
+    # 6. INTERACTIVE STEERING WHEEL
+    cx_wheel = WINDOW_WIDTH * 0.5
+    cy_wheel = WINDOW_HEIGHT * 0.05
+    R_wheel = WINDOW_HEIGHT * 0.12
+
+    glPushMatrix()
+    glTranslatef(cx_wheel, cy_wheel, 0)
+    glRotatef(steering_wheel_angle, 0, 0, 1)
+
+    draw_hud_circle(0, 0, R_wheel, fill=False, r=0.2, g=0.2, b=0.2, alpha=1.0)
+    draw_hud_circle(0, 0, R_wheel * 0.9, fill=False, r=0.4, g=0.4, b=0.4, alpha=1.0)
+
+    glColor3f(0.5, 0.5, 0.5)
+    glLineWidth(4.0)
+    glBegin(GL_LINES)
+    glVertex2f(0, 0); glVertex2f(-R_wheel * 0.9, 0)
+    glVertex2f(0, 0); glVertex2f(R_wheel * 0.9, 0)
+    glVertex2f(0, 0); glVertex2f(0, -R_wheel * 0.9)
+    glEnd()
+
+    draw_hud_circle(0, 0, R_wheel * 0.3, fill=True, r=0.1, g=0.1, b=0.1)
+    draw_hud_circle(0, 0, R_wheel * 0.3, fill=False, r=1.0, g=1.0, b=0.0)
+
+    glPopMatrix()
+
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_FOG)
+
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+
 def display():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
 
-    # Pass delta time to vehicle and rain updates
     current_time = time.time()
     dt = min(current_time - last_frame_time, 0.1)
 
@@ -1106,19 +1473,32 @@ def display():
         update_vehicle_physics()
         update_rain(dt)
 
-    look_x = cam_x + math.sin(math.radians(cam_angle)) * 10
-    look_z = cam_z - math.cos(math.radians(cam_angle)) * 10
-    gluLookAt(cam_x, 3.5, cam_z,
-              look_x, 2.0, look_z,
-              0, 1, 0)
+    if camera_mode == "3rd":
+        # 3rd Person View: Camera is FIXED to car's view from back side.
+        # When the car goes right/left, camera moves right/left staying fixed to car's view.
+        gluLookAt(car_x, 6.0, car_z + 16.0,
+                  car_x, 1.5, car_z - 10.0,
+                  0, 1, 0)
+    else:
+        # 1st Person View: Camera inside cockpit aligned with car position facing forward (-Z)
+        gluLookAt(car_x, 2.2, car_z,
+                  car_x, 2.0, car_z - 20.0,
+                  0, 1, 0)
 
-    ci, cj = stream_world(cam_x, cam_z)
+    ci, cj = stream_world(car_x, car_z)
     update_sky()
-    draw_ground(cam_x, cam_z)
+    draw_ground(car_x, car_z)
     draw_footpaths(ci, cj)
     draw_roads(ci, cj)
     draw_world(ci, cj)
     draw_rain()
+
+    # Draw 3D Car Model facing forward (-Z)
+    draw_3d_car(car_x, car_z, 0.0)
+
+    # In 1st Person View, render simulator car dashboard overlay
+    if camera_mode == "1st":
+        draw_dashboard()
 
     if game_state == "PAUSED":
         draw_pause_overlay()
@@ -1126,10 +1506,10 @@ def display():
 
 
 
-# keyboard handlers
+# keyboard & special input handlers
 
 def keyboard_down(key, x, y):
-    global key_states, game_state
+    global key_states, game_state, camera_mode
     if key == b'\x1b':  # ESC
         game_state = "PAUSED" if game_state == "PLAYING" else "PLAYING"
         glutPostRedisplay()
@@ -1139,9 +1519,13 @@ def keyboard_down(key, x, y):
         return  # ignore movement/other keys while paused
 
     k = key.decode('utf-8').lower() if isinstance(key, bytes) else key.lower()
+    if k == 'v':
+        camera_mode = "1st" if camera_mode == "3rd" else "3rd"
+        glutPostRedisplay()
+        return
+
     if k in key_states:
         key_states[k] = True
-
 
 
 def keyboard_up(key, x, y):
@@ -1151,24 +1535,54 @@ def keyboard_up(key, x, y):
         key_states[k] = False
 
 
+def special_down(key, x, y):
+    global key_states, game_state
+    if game_state != "PLAYING":
+        return
+    if key == GLUT_KEY_UP:
+        key_states['up'] = True
+    elif key == GLUT_KEY_DOWN:
+        key_states['down'] = True
+    elif key == GLUT_KEY_LEFT:
+        key_states['left'] = True
+    elif key == GLUT_KEY_RIGHT:
+        key_states['right'] = True
+
+
+def special_up(key, x, y):
+    global key_states
+    if key == GLUT_KEY_UP:
+        key_states['up'] = False
+    elif key == GLUT_KEY_DOWN:
+        key_states['down'] = False
+    elif key == GLUT_KEY_LEFT:
+        key_states['left'] = False
+    elif key == GLUT_KEY_RIGHT:
+        key_states['right'] = False
+
 
 def update_vehicle_physics():
-    global cam_x, cam_z, cam_angle, car_speed, last_frame_time
+    global car_x, car_z, cam_x, cam_z, car_speed, last_frame_time, current_rpm, steering_wheel_angle
 
     current_time = time.time()
     dt = current_time - last_frame_time
     last_frame_time = current_time
 
-    # Cap delta time to avoid physics jumps on high latency frame drops
+    # Cap delta time to avoid physics jumps
     dt = min(dt, 0.1)
 
+    throttle = key_states['w'] or key_states['up']
+    brake_reverse = key_states['s'] or key_states['down']
+    steer_l = key_states['a'] or key_states['left']
+    steer_r = key_states['d'] or key_states['right']
+
     # 1. Acceleration & Braking / Reverse
-    if key_states['w']:
+    if throttle:
         car_speed += acceleration * dt
-    elif key_states['s']:
+    elif brake_reverse:
         car_speed -= acceleration * dt
     else:
-        # Natural coasting deceleration when no drive keys are pressed
+        # Coasting deceleration
         if car_speed > 0:
             car_speed = max(0.0, car_speed - deceleration * dt)
         elif car_speed < 0:
@@ -1177,20 +1591,36 @@ def update_vehicle_physics():
     # Clamp top speeds
     car_speed = max(max_reverse_speed, min(max_speed, car_speed))
 
-    # 2. Steering (Only turns when the vehicle is actively moving)
-    if abs(car_speed) > 0.1:
-        # Reverse steering direction when reversing
-        dir_factor = 1.0 if car_speed >= 0 else -1.0
+    # 2. Sideways Car Movement (Car shifts left/right on road, CAMERA DOES NOT MOVE)
+    target_steer = 0.0
+    if steer_l:
+        target_steer -= 1.0
+        car_x -= steering_speed * dt
+    if steer_r:
+        target_steer += 1.0
+        car_x += steering_speed * dt
 
-        if key_states['a']:
-            cam_angle -= steering_speed * dt * dir_factor
-        if key_states['d']:
-            cam_angle += steering_speed * dt * dir_factor
+    # Keep car within road boundaries
+    car_x = max(-35.0, min(35.0, car_x))
 
-    #  Position Translation
-    rad = math.radians(cam_angle)
-    cam_x += math.sin(rad) * car_speed * dt
-    cam_z -= math.cos(rad) * car_speed * dt
+    steering_wheel_angle = lerp(steering_wheel_angle, target_steer * 90.0, 10.0 * dt)
+
+    # 3. Forward Movement Translation along Z
+    world_speed = car_speed * 0.25
+    car_z -= world_speed * dt
+
+    # Camera stays fixed directly behind car
+    cam_x = car_x
+    cam_z = car_z + 16.0
+
+    # 4. Engine RPM Calculation
+    speed_ratio = abs(car_speed) / 300.0
+    gear_cycle = (speed_ratio * 4.5) % 1.0
+    throttle_boost = 1800.0 if throttle else 0.0
+    target_rpm = 900.0 + (gear_cycle * 4200.0) + (speed_ratio * 1500.0) + throttle_boost
+    target_rpm = min(8000.0, max(800.0, target_rpm))
+    current_rpm = lerp(current_rpm, target_rpm, 8.0 * dt)
+
 
 def layout_pause_buttons():
     global resume_btn, quit_btn
@@ -1223,11 +1653,11 @@ def init():
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    # Distance fog configuration
+    # Distance fog configuration (pushed far to horizon so roads remain solid black)
     glEnable(GL_FOG)
     glFogi(GL_FOG_MODE, GL_LINEAR)
-    glFogf(GL_FOG_START, CELL_SIZE * (VIEW_RADIUS - 1))
-    glFogf(GL_FOG_END, CELL_SIZE * (VIEW_RADIUS + 0.8))
+    glFogf(GL_FOG_START, 700.0)
+    glFogf(GL_FOG_END, 1400.0)
 
     stream_world(cam_x, cam_z)
 
@@ -1239,7 +1669,7 @@ def reshape(w, h):
     glViewport(0, 0, w, h)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
-    gluPerspective(60, float(w) / float(h if h else 1), 0.1, 500.0)
+    gluPerspective(60, float(w) / float(h if h else 1), 0.1, 1500.0)
     glMatrixMode(GL_MODELVIEW)
     layout_pause_buttons()
     glutPostRedisplay()
@@ -1259,6 +1689,8 @@ def main():
     glutReshapeFunc(reshape)
     glutKeyboardFunc(keyboard_down)
     glutKeyboardUpFunc(keyboard_up)
+    glutSpecialFunc(special_down)
+    glutSpecialUpFunc(special_up)
     glutMouseFunc(mouse)
     glutTimerFunc(16, update_time, 0)
     glutIdleFunc(glutPostRedisplay)
