@@ -19,22 +19,27 @@ cam_angle = 0.0              # fixed camera angle facing straight forward
 camera_mode = "3rd"          # "3rd" (3rd person view) or "1st" (1st person simulator view)
 current_rpm = 900.0          # Current engine RPM (800 - 8000 RPM)
 steering_wheel_angle = 0.0   # Visual steering wheel angle in FPV
-
+car_angle=0
+steer=0
 # ---------------- Rain System ----------------
 RAIN_COUNT = 1000 #number of raindrops stored
 raindrops = []
 is_raining = False
+# Wet weather physics multipliers
+WET_FRICTION_MULT = 0.35    # 65% reduction in tire friction (coasts much further)
+WET_ACCEL_MULT = 0.50       # 50% reduction in acceleration/braking grip
+WET_STEER_MULT = 0.40       # 60% reduction in turn steering sharp response
 last_rain_toggle = time.time() #duration between each rain
 
 car_speed = 0.0
 max_speed = 300.0         # Top forward speed (0 - 300 km/h)
 max_reverse_speed = -60.0 # Top reverse speed (km/h)
-acceleration = 70.0       # Acceleration build up rate
-deceleration = 25.0       # Coasting friction when no drive key is held
-steering_speed = 35.0     # Sideways car movement speed (units/sec)
+acceleration = 18.0       # Acceleration build up rate
+deceleration = 32.0       # Coasting friction when no drive key is held
+steering_speed = 3.0     # Sideways car movement speed (units/sec)
 
-INTERSECTION_INTERVAL = 1  # Continuous road grid on every block
-ROAD_DRAW_RADIUS = 2       # Optimal road rendering radius for fast 60+ FPS performance
+INTERSECTION_INTERVAL = 3  # Continuous road grid on every block
+ROAD_DRAW_RADIUS = 3       # Optimal road rendering radius for fast 60+ FPS performance
 
 # Input tracking for WASD and 4 Arrow keys
 key_states = {'w': False, 's': False, 'a': False, 'd': False, 'up': False, 'down': False, 'left': False, 'right': False}
@@ -55,7 +60,7 @@ PRUNE_MARGIN = VIEW_RADIUS + 2    # cached blocks further than this get droppede
 
 # cache of generated blocks: {(bi, bj): {"trees": [...], "buildings": [...], "lamps": [...]}}
 block_cache = {}
-
+street_lamp_radius=[]
 BUILDING_COLORS = [
     (0.70, 0.70, 0.75),
     (0.80, 0.60, 0.50),
@@ -518,7 +523,7 @@ def draw_slow_sign(cx, cz, angle=0):
         scale=0.005,angle=180)
     draw_3d_text(
         0.7, 3.5, -0.25,
-        "20",
+        "80",
         color=black,
         scale=0.012,angle=180)
 
@@ -531,7 +536,7 @@ def draw_slow_sign(cx, cz, angle=0):
         scale=0.005,angle=180)
     draw_3d_text(
         0.7, 3.5, -0.25,
-        "20",
+        "80",
         color=black,
         scale=0.012,angle=180)
     glPopMatrix()
@@ -828,11 +833,14 @@ def draw_lamp(x, z):
     glPopMatrix()
 
 
+
+
 def draw_lamp_glow(radius=10.0):
     global ambient_light
     night_factor = max(0.0, 1.0 - (ambient_light - 0.2) / 0.8)
     if night_factor <= 0.01:
         return
+
 
     glDepthMask(GL_FALSE)
     glBegin(GL_TRIANGLE_FAN)
@@ -852,6 +860,7 @@ def draw_lamp_glow(radius=10.0):
 
     glEnd()
     glDepthMask(GL_TRUE)
+
 
 
 def draw_Street_lamp(x, z, angle):
@@ -1474,15 +1483,29 @@ def display():
         update_rain(dt)
 
     if camera_mode == "3rd":
-        # 3rd Person View: Camera is FIXED to car's view from back side.
-        # When the car goes right/left, camera moves right/left staying fixed to car's view.
-        gluLookAt(car_x, 6.0, car_z + 16.0,
-                  car_x, 1.5, car_z - 10.0,
+        # 3rd Person View
+        rad = math.radians(car_angle)
+        forward_x = -math.sin(rad)
+        forward_z = -math.cos(rad)
+
+        cam_x = car_x - forward_x * 16.0
+        cam_z = car_z - forward_z * 16.0
+
+        gluLookAt(cam_x, 6.0, cam_z,
+                  car_x, 1.5, car_z,
                   0, 1, 0)
     else:
-        # 1st Person View: Camera inside cockpit aligned with car position facing forward (-Z)
+        # 1st Person Cockpit View (FIXED)
+        rad = math.radians(car_angle)
+        forward_x = -math.sin(rad)
+        forward_z = -math.cos(rad)
+
+        # Look target points 20 units straight out of the car's windshield
+        look_target_x = car_x + forward_x * 20.0
+        look_target_z = car_z + forward_z * 20.0
+
         gluLookAt(car_x, 2.2, car_z,
-                  car_x, 2.0, car_z - 20.0,
+                  look_target_x, 2.0, look_target_z,
                   0, 1, 0)
 
     ci, cj = stream_world(car_x, car_z)
@@ -1494,7 +1517,8 @@ def display():
     draw_rain()
 
     # Draw 3D Car Model facing forward (-Z)
-    draw_3d_car(car_x, car_z, 0.0)
+
+    draw_3d_car(car_x, car_z, car_angle)
 
     # In 1st Person View, render simulator car dashboard overlay
     if camera_mode == "1st":
@@ -1562,7 +1586,7 @@ def special_up(key, x, y):
 
 
 def update_vehicle_physics():
-    global car_x, car_z, cam_x, cam_z, car_speed, last_frame_time, current_rpm, steering_wheel_angle
+    global car_x, car_z, cam_x, cam_z, car_speed, last_frame_time, current_rpm, steering_wheel_angle,car_angle,car_tilt
 
     current_time = time.time()
     dt = current_time - last_frame_time
@@ -1575,6 +1599,16 @@ def update_vehicle_physics():
     brake_reverse = key_states['s'] or key_states['down']
     steer_l = key_states['a'] or key_states['left']
     steer_r = key_states['d'] or key_states['right']
+
+    #  Dynamic Rain Surface Physics Scaling
+    if is_raining:
+        effective_accel = acceleration * WET_ACCEL_MULT
+        effective_decel = deceleration * WET_FRICTION_MULT  # Low friction = slides longer
+        effective_turn_rate = 90.0 * WET_STEER_MULT  # Sluggish turning response
+    else:
+        effective_accel = acceleration
+        effective_decel = deceleration
+        effective_turn_rate = 90.0
 
     # 1. Acceleration & Braking / Reverse
     if throttle:
@@ -1591,27 +1625,53 @@ def update_vehicle_physics():
     # Clamp top speeds
     car_speed = max(max_reverse_speed, min(max_speed, car_speed))
 
-    # 2. Sideways Car Movement (Car shifts left/right on road, CAMERA DOES NOT MOVE)
+
+    # 2. Smooth Arcade Lane Transition (Realistic Car Turning)
     target_steer = 0.0
+    steer_input = 0.0
+
     if steer_l:
-        target_steer -= 1.0
-        car_x -= steering_speed * dt
-    if steer_r:
-        target_steer += 1.0
-        car_x += steering_speed * dt
+        steer_input = 1.0
+        target_steer = 1.0
+    elif steer_r:
+        steer_input = -1.0
+        target_steer = -1.0
 
-    # Keep car within road boundaries
-    car_x = max(-35.0, min(35.0, car_x))
+        # Continuously rotate car_angle as long as A or D is held down
+    turn_rate = 90.0  # Degrees per second (increase for faster turns)
 
+    # Only allow turning if the car is moving (realistic driving feel)
+    if abs(car_speed) > 0.1:
+        # Reverses steering direction when backing up
+        dir_factor = 1.0 if car_speed >= 0 else -1.0
+        car_angle += steer_input * turn_rate * dt * dir_factor
+
+    # Keep angle bound within 0 to 360 degrees
+    car_angle %= 360.0
+
+
+
+   #controls steering wheels movement
     steering_wheel_angle = lerp(steering_wheel_angle, target_steer * 90.0, 10.0 * dt)
 
-    # 3. Forward Movement Translation along Z
-    world_speed = car_speed * 0.25
-    car_z -= world_speed * dt
 
-    # Camera stays fixed directly behind car
-    cam_x = car_x
-    cam_z = car_z + 16.0
+    # 3. Forward Movement along car's facing direction (car_angle)
+    world_speed = car_speed * 0.25
+    rad = math.radians(car_angle)
+
+    # Calculate 2D direction vectors based on facing angle
+    forward_x = -math.sin(rad)
+    forward_z = -math.cos(rad)
+
+    # Move along the calculated directional vectors
+    car_x += forward_x * world_speed * dt
+    car_z += forward_z * world_speed * dt
+
+    # Keep camera aligned behind the car's dynamic heading
+    cam_x = car_x - forward_x * 16.0
+    cam_z = car_z - forward_z * 16.0
+
+
 
     # 4. Engine RPM Calculation
     speed_ratio = abs(car_speed) / 300.0
