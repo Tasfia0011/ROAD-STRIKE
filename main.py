@@ -686,7 +686,7 @@ def draw_garage(cx, cz):
 def draw_intersections(ci, cj):
     #Zebra crossings + stop lines on every approach of every visible intersection of roads
 
-    stripe_w, stripe_len, gap = 0.6, ROAD_WIDTH - 2.0, 0.6
+    stripe_w, stripe_len, gap = 0.6,  ROAD_WIDTH - 2.0, 0.6
     inset = ROAD_WIDTH / 2.0 + 0.6
 
     glColor3f(0.95, 0.95, 0.9)
@@ -1138,14 +1138,15 @@ def draw_hud_circle(cx, cy, radius, num_segments=36, fill=False, r=1.0, g=1.0, b
         glVertex2f(cx + math.cos(ang) * radius, cy + math.sin(ang) * radius)
     glEnd()
 
+
 # ---------------- 3D Car Model ----------------
 
 def draw_3d_car(cx, cz, angle):
     # 1. Proximity light calculation
-    light_factor = get_car_light_factor(light_radius=19.0)
+    light_factor = get_car_light_factor(light_radius=16.0)
 
     # Lighting Multiplier: Scales color brightness up when under light
-    mult = 1.0 + (light_factor * 10)
+    mult = 1.0 + (light_factor * 7)
 
     def light_color(r, g, b):
         return (
@@ -1552,8 +1553,9 @@ def display():
     draw_rain()
 
     # Draw 3D Car Model facing forward (-Z)
+    if camera_mode == "3rd":
+        draw_3d_car(car_x, car_z, car_angle)
 
-    draw_3d_car(car_x, car_z, car_angle)
 
     # In 1st Person View, render simulator car dashboard overlay
     if camera_mode == "1st":
@@ -1619,6 +1621,90 @@ def special_up(key, x, y):
     elif key == GLUT_KEY_RIGHT:
         key_states['right'] = False
 
+def car_collides(test_x, test_z, test_angle):
+    # Car dimensions
+    car_half_width = 1.6
+    car_half_length = 3.1
+
+    # Get the 4 corners of the rotated car rectangle
+    rad = math.radians(test_angle)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+
+    local_corners = [
+        (-car_half_width, -car_half_length),
+        ( car_half_width, -car_half_length),
+        ( car_half_width,  car_half_length),
+        (-car_half_width,  car_half_length)
+    ]
+
+    car_corners = []
+    for lx, lz in local_corners:
+        world_x = test_x + lx * cos_a + lz * sin_a
+        world_z = test_z - lx * sin_a + lz * cos_a
+        car_corners.append((world_x, world_z))
+
+    # Car's axis-aligned bounding box (AABB)
+    car_min_x = min(p[0] for p in car_corners)
+    car_max_x = max(p[0] for p in car_corners)
+    car_min_z = min(p[1] for p in car_corners)
+    car_max_z = max(p[1] for p in car_corners)
+
+    # Only check nearby blocks
+    ci, cj = camera_block(test_x, test_z)
+
+    # Define object types and their collision radii/dimensions
+    # (key in block dict -> collision radius if round, or None if rectangular)
+    POINT_OBJECT_RADII = {
+        "trees": 1.2,
+        "lamps": 0.6,
+        "street_lamps": 0.6,
+        "traffic_lights": 0.8,
+        "road_signs": 0.5
+    }
+
+    BOX_OBJECT_KEYS = ["buildings", "hospitals", "schools", "garage"]
+
+    for bi in range(ci - 1, ci + 2):
+        for bj in range(cj - 1, cj + 2):
+            block = block_cache.get((bi, bj))
+            if block is None:
+                continue
+
+            # 1. Loop through all rectangular objects (buildings, hospitals, schools, garages)
+            for key in BOX_OBJECT_KEYS:
+                for obj in block.get(key, []):
+                    # Unpack first 4 values regardless of extra metadata (color, seed, height, etc.)
+                    x, z, w, d = obj[0], obj[1], obj[2], obj[3]
+
+                    obj_min_x = x - w / 2.0
+                    obj_max_x = x + w / 2.0
+                    obj_min_z = z - d / 2.0
+                    obj_max_z = z + d / 2.0
+
+                    if (
+                        car_max_x > obj_min_x and
+                        car_min_x < obj_max_x and
+                        car_max_z > obj_min_z and
+                        car_min_z < obj_max_z
+                    ):
+                        return True
+
+            # 2. Loop through all point/pole objects (trees, lamps, signs, traffic lights)
+            for key, radius in POINT_OBJECT_RADII.items():
+                for obj in block.get(key, []):
+                    x, z = obj[0], obj[1]  # Extract (x, z) coordinates
+
+                    if (
+                        car_max_x > x - radius and
+                        car_min_x < x + radius and
+                        car_max_z > z - radius and
+                        car_min_z < z + radius
+                    ):
+                        return True
+
+    return False
+
 
 def update_vehicle_physics():
     global car_x, car_z, cam_x, cam_z, car_speed, last_frame_time, current_rpm, steering_wheel_angle,car_angle,car_tilt
@@ -1647,15 +1733,15 @@ def update_vehicle_physics():
 
     # 1. Acceleration & Braking / Reverse
     if throttle:
-        car_speed += acceleration * dt
+        car_speed += effective_accel * dt
     elif brake_reverse:
-        car_speed -= acceleration * dt
+        car_speed -= effective_accel * dt
     else:
         # Coasting deceleration
         if car_speed > 0:
-            car_speed = max(0.0, car_speed - deceleration * dt)
+            car_speed = max(0.0, car_speed - effective_decel * dt)
         elif car_speed < 0:
-            car_speed = min(0.0, car_speed + deceleration * dt)
+            car_speed = min(0.0, car_speed + effective_decel * dt)
 
     # Clamp top speeds
     car_speed = max(max_reverse_speed, min(max_speed, car_speed))
@@ -1673,7 +1759,7 @@ def update_vehicle_physics():
         target_steer = -1.0
 
         # Continuously rotate car_angle as long as A or D is held down
-    turn_rate = 90.0  # Degrees per second (increase for faster turns)
+    turn_rate = effective_turn_rate  # Degrees per second (increase for faster turns)
 
     # Only allow turning if the car is moving (realistic driving feel)
     if abs(car_speed) > 0.1:
@@ -1699,8 +1785,20 @@ def update_vehicle_physics():
     forward_z = -math.cos(rad)
 
     # Move along the calculated directional vectors
-    car_x += forward_x * world_speed * dt
-    car_z += forward_z * world_speed * dt
+    # car_x += forward_x * world_speed * dt
+    # car_z += forward_z * world_speed * dt
+    # Calculate desired new position
+    new_x = car_x + forward_x * world_speed * dt
+    new_z = car_z + forward_z * world_speed * dt
+
+    # Collision detection
+    if not car_collides(new_x, new_z, car_angle):
+        car_x = new_x
+        car_z = new_z
+    else:
+        # Collision: stop the car
+        if car_speed > 0:
+            car_speed = 0.0
 
     # Keep camera aligned behind the car's dynamic heading
     cam_x = car_x - forward_x * 16.0
