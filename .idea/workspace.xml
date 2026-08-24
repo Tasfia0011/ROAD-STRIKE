@@ -5,6 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="00474a01-b305-436e-ae39-e0fdaa6ab765" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -24,61 +25,61 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0000156877720137" />
-      <entry key="MS500" value="1.1103618707695686" />
-      <entry key="S2" value="1.8442330084231853" />
-      <entry key="S5" value="2.6902281619858988" />
-      <entry key="S10" value="3.226495053863732" />
-      <entry key="S30" value="3.709455994242856" />
-      <entry key="S60" value="3.850162239082512" />
-      <entry key="M2" value="3.9257303969265176" />
-      <entry key="M5" value="4.14007914032039" />
-      <entry key="M10" value="4.943497209281814" />
-      <entry key="M15" value="5.923315712371085" />
-      <entry key="M30" value="9.484983365598312" />
-      <entry key="H1" value="23.596605327057553" />
-      <entry key="H2" value="78.5979335292524" />
-      <entry key="H4" value="218.09456949438422" />
-      <entry key="D1" value="781.7801464229228" />
-      <entry key="W1" value="1037.4196718864985" />
+      <entry key="MS100" value="7.18717473526302E-8" />
+      <entry key="MS500" value="0.037915574643672414" />
+      <entry key="S2" value="0.5990192008000319" />
+      <entry key="S5" value="1.1996974685701234" />
+      <entry key="S10" value="1.541174297190078" />
+      <entry key="S30" value="1.8319657497407849" />
+      <entry key="S60" value="1.9435461986349603" />
+      <entry key="M2" value="2.2058485882586174" />
+      <entry key="M5" value="3.6410413225187566" />
+      <entry key="M10" value="8.844082493127265" />
+      <entry key="M15" value="14.686035345011737" />
+      <entry key="M30" value="27.957191168192946" />
+      <entry key="H1" value="47.70871710407279" />
+      <entry key="H2" value="100.54799849501987" />
+      <entry key="H4" value="235.28009640662506" />
+      <entry key="D1" value="811.3274047605524" />
+      <entry key="W1" value="1080.303139359679" />
     </decayedCancelled>
     <decayedSelected>
-      <entry key="MS100" value="0.0" />
-      <entry key="MS500" value="0.0" />
-      <entry key="S2" value="0.0" />
-      <entry key="S5" value="5.512353830584534E-216" />
-      <entry key="S10" value="2.347840248097075E-108" />
-      <entry key="S30" value="1.3291041907753679E-36" />
-      <entry key="S60" value="1.155815414299407E-18" />
-      <entry key="M2" value="1.128041674956909E-9" />
-      <entry key="M5" value="3.368736109621864E-4" />
-      <entry key="M10" value="0.025234199334667792" />
-      <entry key="M15" value="0.11127751072560335" />
-      <entry key="M30" value="0.5495707287206585" />
-      <entry key="H1" value="1.4438319263510777" />
-      <entry key="H2" value="2.7184799571340883" />
-      <entry key="H4" value="4.586239749402563" />
-      <entry key="D1" value="13.401467588433903" />
-      <entry key="W1" value="18.02340394955072" />
+      <entry key="MS100" value="1.0" />
+      <entry key="MS500" value="1.0" />
+      <entry key="S2" value="1.0" />
+      <entry key="S5" value="1.0" />
+      <entry key="S10" value="1.0" />
+      <entry key="S30" value="1.0" />
+      <entry key="S60" value="1.0000000086311993" />
+      <entry key="M2" value="1.0001582154690989" />
+      <entry key="M5" value="1.0581138285427205" />
+      <entry key="M10" value="1.4186015549432571" />
+      <entry key="M15" value="1.8208694991392262" />
+      <entry key="M30" value="2.760097585543901" />
+      <entry key="H1" value="4.04308749639827" />
+      <entry key="H2" value="5.67207418845239" />
+      <entry key="H4" value="7.81990997837671" />
+      <entry key="D1" value="17.089380134031224" />
+      <entry key="W1" value="21.964963238876916" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.9048104498878126E-5" />
-      <entry key="MS500" value="0.12369117501775044" />
-      <entry key="S2" value="1.0314297859089363" />
-      <entry key="S5" value="2.09628577722877" />
-      <entry key="S10" value="2.835048580550394" />
-      <entry key="S30" value="3.548698288643122" />
-      <entry key="S60" value="3.765214001992778" />
-      <entry key="M2" value="3.8820432255986623" />
-      <entry key="M5" value="4.122571632932464" />
-      <entry key="M10" value="4.959565540373484" />
-      <entry key="M15" value="6.028200493103036" />
-      <entry key="M30" value="10.030517688689846" />
-      <entry key="H1" value="25.037135908857273" />
-      <entry key="H2" value="81.31331798221004" />
-      <entry key="H4" value="222.67793700869197" />
-      <entry key="D1" value="795.1803233508223" />
-      <entry key="W1" value="1055.4428393135354" />
+      <entry key="MS100" value="7.187174738569462E-8" />
+      <entry key="MS500" value="0.03821208920111849" />
+      <entry key="S2" value="0.7284614700868248" />
+      <entry key="S5" value="1.6407606528362662" />
+      <entry key="S10" value="2.205222943994318" />
+      <entry key="S30" value="2.7043589931047824" />
+      <entry key="S60" value="2.8768894096201603" />
+      <entry key="M2" value="3.169585372957278" />
+      <entry key="M5" value="4.678598450929662" />
+      <entry key="M10" value="10.244678047436794" />
+      <entry key="M15" value="16.490202652368627" />
+      <entry key="M30" value="30.704337172226023" />
+      <entry key="H1" value="51.742739431735394" />
+      <entry key="H2" value="106.21372124577142" />
+      <entry key="H4" value="243.09538794203576" />
+      <entry key="D1" value="828.4151572954919" />
+      <entry key="W1" value="1102.2678144752113" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -114,30 +115,6 @@
   }
 }</component>
   <component name="RunManager">
-    <configuration default="true" type="PythonConfigurationType" factoryName="Python">
-      <module name="ROAD STRIKE" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="SCRIPT_NAME" value="" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
     <configuration name="main" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
       <module name="ROAD STRIKE" />
       <option name="ENV_FILES" value="" />
@@ -161,96 +138,6 @@
       <option name="MODULE_MODE" value="false" />
       <option name="REDIRECT_INPUT" value="false" />
       <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="Tox" factoryName="Tox">
-      <module name="ROAD STRIKE" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="docs" factoryName="Docutils task">
-      <module name="ROAD STRIKE" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="docutils_input_file" value="" />
-      <option name="docutils_output_file" value="" />
-      <option name="docutils_params" value="" />
-      <option name="docutils_task" value="" />
-      <option name="docutils_open_in_browser" value="false" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="docs" factoryName="Sphinx task">
-      <module name="ROAD STRIKE" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="docutils_input_file" value="" />
-      <option name="docutils_output_file" value="" />
-      <option name="docutils_params" value="" />
-      <option name="docutils_task" value="" />
-      <option name="docutils_open_in_browser" value="false" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="tests" factoryName="Autodetect">
-      <module name="ROAD STRIKE" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;&quot;" />
-      <option name="_new_targetType" value="&quot;PATH&quot;" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="tests" factoryName="Doctests">
-      <module name="ROAD STRIKE" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="SCRIPT_NAME" value="" />
-      <option name="CLASS_NAME" value="" />
-      <option name="METHOD_NAME" value="" />
-      <option name="FOLDER_NAME" value="" />
-      <option name="TEST_TYPE" value="TEST_SCRIPT" />
-      <option name="PATTERN" value="" />
-      <option name="USE_PATTERN" value="false" />
       <method v="2" />
     </configuration>
   </component>

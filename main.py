@@ -864,6 +864,7 @@ def draw_lamp_glow(radius=10.0):
 
 
 def draw_Street_lamp(x, z, angle):
+
     glPushMatrix()
     glTranslatef(x, 0, z)
     glRotatef(angle, 0, 1, 0)
@@ -1030,6 +1031,7 @@ def draw_rain():
 
 
 def draw_world(ci, cj):
+    global street_lamp_radius
     for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
         for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
             block = block_cache.get((bi, bj))
@@ -1047,6 +1049,10 @@ def draw_world(ci, cj):
             for (x, z) in block["lamps"]:
                 draw_lamp(x, z)
             for (x, z, angle) in block["street_lamps"]:
+                rad = math.radians(angle)
+                light_x=x+math.sin(rad)*4.5
+                light_z = z - math.cos(rad) * 4.5
+                street_lamp_radius.append((light_x,light_z))
                 draw_Street_lamp(x, z, angle)
             for (x, z,rotation )in block["traffic_lights"]:
                 draw_traffic_light(x,z,rotation,get_traffic_states())
@@ -1132,61 +1138,71 @@ def draw_hud_circle(cx, cy, radius, num_segments=36, fill=False, r=1.0, g=1.0, b
         glVertex2f(cx + math.cos(ang) * radius, cy + math.sin(ang) * radius)
     glEnd()
 
-
 # ---------------- 3D Car Model ----------------
 
 def draw_3d_car(cx, cz, angle):
+    # 1. Proximity light calculation
+    light_factor = get_car_light_factor(light_radius=19.0)
+
+    # Lighting Multiplier: Scales color brightness up when under light
+    mult = 1.0 + (light_factor * 10)
+
+    def light_color(r, g, b):
+        return (
+            min(1.0, r * mult),
+            min(1.0, g * mult * 0.95),
+            min(1.0, b * mult * 0.7)
+        )
+
+    # 2. Draw Car setup
     glPushMatrix()
-    glTranslatef(cx, 0.2, cz)
+    glTranslatef(cx, 1.0, cz)
     glRotatef(angle, 0, 1, 0)
 
-    # 1. Main Chassis / Body (Glossy Red / Crimson)
-    draw_box(0, 0.4, 0, 3.2, 0.9, 6.0, (0.85, 0.1, 0.15))
+    # Main Chassis (Base Red)
+    draw_box(0, 0.4, 0, 3.2, 0.9, 6.0, light_color(0.5, 0.05, 0.08))
 
-    # 2. Lower skirts / Front & Rear Bumper
-    draw_box(0, 0.15, 0, 3.3, 0.35, 6.2, (0.15, 0.15, 0.15))
+    # Lower Bumper
+    draw_box(0, 0.15, 0, 3.3, 0.35, 6.2, light_color(0.15, 0.15, 0.15))
 
-    # 3. Upper Cabin Roof Pillars & Open Frame (Glass removed)
-    draw_box(0, 1.65, -1.3, 2.5, 0.2, 0.2, (0.1, 0.1, 0.15))   # Front windshield top frame bar
-    draw_box(-1.25, 1.35, -0.4, 0.15, 0.8, 2.0, (0.1, 0.1, 0.15)) # Left side door frame
-    draw_box(1.25, 1.35, -0.4, 0.15, 0.8, 2.0, (0.1, 0.1, 0.15))  # Right side door frame
-    draw_box(0, 1.65, 1.2, 2.5, 0.2, 0.2, (0.1, 0.1, 0.15))    # Rear top frame bar
+    # Roof Pillars & Frame
+    frame_col = light_color(0.1, 0.1, 0.15)
+    draw_box(0, 1.65, -1.3, 2.5, 0.2, 0.2, frame_col)
+    draw_box(-1.25, 1.35, -0.4, 0.15, 0.8, 2.0, frame_col)
+    draw_box(1.25, 1.35, -0.4, 0.15, 0.8, 2.0, frame_col)
+    draw_box(0, 1.65, 1.2, 2.5, 0.2, 0.2, frame_col)
 
-    # 4. 3D Driver / Player Character inside Car (Driver seat left side)
+    # Driver & Interior
     quad = gluNewQuadric()
 
-    # Driver Seat & Torso (Blue sports jacket)
-    draw_box(-0.55, 1.05, 0.1, 0.7, 0.7, 0.5, (0.2, 0.35, 0.8))
+    # Seat / Torso
+    draw_box(-0.55, 1.05, 0.1, 0.7, 0.7, 0.5, light_color(0.2, 0.35, 0.8))
 
-    # Driver Head (Skin tone)
+    # Driver Head
+    h_col = light_color(0.95, 0.75, 0.6)
     glPushMatrix()
     glTranslatef(-0.55, 1.55, 0.1)
-    glColor3f(0.95, 0.75, 0.6)
+    glColor3f(*h_col)
     gluSphere(quad, 0.32, 10, 10)
     glPopMatrix()
 
-    # Driver Cap / Hair (Dark cap)
+    # Driver Cap
+    c_col = light_color(0.12, 0.12, 0.15)
     glPushMatrix()
     glTranslatef(-0.55, 1.72, 0.08)
-    glColor3f(0.12, 0.12, 0.15)
+    glColor3f(*c_col)
     gluSphere(quad, 0.30, 8, 8)
     glPopMatrix()
 
-    # Driver Arms (Skin tone extending forward to steering wheel)
-    draw_box(-0.55, 1.2, -0.35, 0.55, 0.15, 0.5, (0.95, 0.75, 0.6))
-
-    # Interior 3D Steering Wheel
+    # Steering Wheel
     glPushMatrix()
     glTranslatef(-0.55, 1.25, -0.65)
-    glColor3f(0.15, 0.15, 0.18)
+    w_col = light_color(0.15, 0.15, 0.18)
+    glColor3f(*w_col)
     gluCylinder(quad, 0.3, 0.3, 0.1, 10, 1)
     glPopMatrix()
 
-    # Side Mirrors (towards front -Z)
-    draw_box(-1.6, 1.25, -0.8, 0.35, 0.2, 0.4, (0.1, 0.1, 0.12))
-    draw_box(1.6, 1.25, -0.8, 0.35, 0.2, 0.4, (0.1, 0.1, 0.12))
-
-    # 5. Front Headlights (facing -Z, bright white/yellow)
+    # Headlights & Taillights (Constant emissive glow)
     glColor3f(1.0, 1.0, 0.85)
     for side in (-1.1, 1.1):
         glPushMatrix()
@@ -1194,7 +1210,6 @@ def draw_3d_car(cx, cz, angle):
         glutSolidCube(0.4)
         glPopMatrix()
 
-    # 6. Rear Taillights (facing +Z, glowing red)
     glColor3f(1.0, 0.05, 0.05)
     for side in (-1.1, 1.1):
         glPushMatrix()
@@ -1202,23 +1217,21 @@ def draw_3d_car(cx, cz, angle):
         glutSolidCube(0.4)
         glPopMatrix()
 
-    # 7. Wheels (4 Corners)
-    wheel_pos = [(-1.6, 0.45, -1.8), (1.6, 0.45, -1.8), (-1.6, 0.45, 1.8), (1.6, 0.45, 1.8)]
-    for wx, wy, wz in wheel_pos:
+    # Wheels
+    wheel_col = light_color(0.12, 0.12, 0.14)
+    rim_col = light_color(0.7, 0.7, 0.75)
+    for wx, wy, wz in [(-1.6, 0.45, -1.8), (1.6, 0.45, -1.8), (-1.6, 0.45, 1.8), (1.6, 0.45, 1.8)]:
         glPushMatrix()
         glTranslatef(wx, wy, wz)
         glRotatef(90 if wx > 0 else -90, 0, 1, 0)
-        glColor3f(0.12, 0.12, 0.14)
+        glColor3f(*wheel_col)
         gluCylinder(quad, 0.5, 0.5, 0.4, 14, 1)
-        # Wheel Rim Cap
-        glColor3f(0.7, 0.7, 0.75)
+        glColor3f(*rim_col)
         gluSphere(quad, 0.3, 10, 10)
         glPopMatrix()
 
     gluDeleteQuadric(quad)
     glPopMatrix()
-
-
 # ---------------- Simulator Car Dashboard Overlay ----------------
 
 def draw_dashboard():
@@ -1470,7 +1483,29 @@ def draw_dashboard():
     glMatrixMode(GL_MODELVIEW)
 
 
+def get_car_light_factor(light_radius=15.0):
+    """Calculates brightness factor (0.0 to 1.0) based on distance to nearest street lamp."""
+    global car_x, car_z, ambient_light, street_lamp_radius
+
+    night_factor = max(0.0, 1.0 - (ambient_light - 0.2) / 0.8)
+    if night_factor <= 0.01 or not street_lamp_radius:
+        return 0.0
+
+    max_illumination = 0.0
+    for lx, lz in street_lamp_radius:
+        # Calculate distance between car and street lamp
+        dist = math.hypot(car_x - lx, car_z - lz)
+        if dist < light_radius:
+            factor = (1.0 - (dist / light_radius)) * night_factor
+            if factor > max_illumination:
+                max_illumination = factor
+
+    return max_illumination
+
 def display():
+    global street_lamp_radius
+    street_lamp_radius.clear()  # Clear lamp tracking list at start of frame
+
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
