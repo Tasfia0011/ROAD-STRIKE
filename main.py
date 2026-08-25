@@ -36,6 +36,7 @@ last_rain_toggle = time.time() #duration between each rain
 car_health = 5
 player_health = 5.0
 score = 0
+enemies_killed = 0
 wanted_stars = 0
 police_active = False
 police_x, police_y, police_z = 0.0, 0.0, 0.0
@@ -373,12 +374,72 @@ def draw_pause_overlay():
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
 
+# Game over buttons — same size/format as the pause buttons, laid out via
+# layout_game_over_buttons() so they stay correct across window resizes.
+play_again_btn = (0, 0, 0, 0)
+game_over_quit_btn = (0, 0, 0, 0)
+
+
+def layout_game_over_buttons():
+    global play_again_btn, game_over_quit_btn
+    cx = WINDOW_WIDTH // 2
+    btn_w, btn_h = 220, 60
+    gap = 30
+
+    y1 = WINDOW_HEIGHT // 2 - btn_h // 2
+    y2 = y1 + btn_h
+
+    play_again_btn    = (cx - gap // 2 - btn_w, y1, cx - gap // 2, y2)
+    game_over_quit_btn = (cx + gap // 2, y1, cx + gap // 2 + btn_w, y2)
+
+def draw_game_over_overlay():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
+
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_FOG)
+
+    # Dark background overlay
+    glEnable(GL_BLEND)
+    glColor4f(0, 0, 0, 0.7)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0); glVertex2f(WINDOW_WIDTH, 0)
+    glVertex2f(WINDOW_WIDTH, WINDOW_HEIGHT); glVertex2f(0, WINDOW_HEIGHT)
+    glEnd()
+
+    # "GAME OVER" Text
+    glColor3f(1, 0.2, 0.2)  # Red color
+    glRasterPos2f(WINDOW_WIDTH / 2 - 60, WINDOW_HEIGHT / 2 + 100)
+    for ch in "GAME OVER":
+        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, ord(ch))
+
+    # Render Buttons using your existing draw_button function
+    draw_button(play_again_btn, "Play Again")
+    draw_button(game_over_quit_btn, "Quit")
+
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_FOG)
+
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+
+# def point_in_rect(px, py, rect):
+#     x1, y1, x2, y2 = rect
+#     return x1 <= px <= x2 and y1 <= py <= y2
 
 def point_in_rect(px, py, rect):
     x1, y1, x2, y2 = rect
-    return x1 <= px <= x2 and y1 <= py <= y2
-
-
+    min_x, max_x = min(x1, x2), max(x1, x2)
+    min_y, max_y = min(y1, y2), max(y1, y2)
+    return min_x <= px <= max_x and min_y <= py <= max_y
 # ---------------- ground / road / footpaths ----------------
 
 
@@ -1076,7 +1137,7 @@ def is_near_obstacle(x, z):
 
 
 def update_and_draw_enemies(dt):
-    global enemies, bullets, score, car_z, car_x, total_distance_travelled
+    global enemies, bullets, score, enemies_killed, car_z, car_x, total_distance_travelled
     current_t = time.time()
     dist_km = total_distance_travelled / 10.0
 
@@ -1096,9 +1157,23 @@ def update_and_draw_enemies(dt):
 
     while len(enemies) < target_max and allowed_levels:
         spawn_lvl = random.choice(allowed_levels)
-        side = random.choice([-1, 1])
-        spawn_x = side * random.uniform(ROAD_WIDTH / 2.0 + 2.0, ROAD_WIDTH / 2.0 + 10.0)
-        spawn_z = car_z - random.uniform(60.0, 110.0)
+        # side = random.choice([-1, 1])
+        # spawn_x = side * random.uniform(ROAD_WIDTH / 2.0 + 2.0, ROAD_WIDTH / 2.0 + 10.0)
+        # spawn_z = car_z - random.uniform(60.0, 110.0)
+        rad_h = math.radians(car_heading)
+
+        forward_x = math.sin(rad_h)
+        forward_z = -math.cos(rad_h)
+
+        side_x = math.cos(rad_h)
+        side_z = math.sin(rad_h)
+
+        distance = random.uniform(60.0, 110.0)
+        side_distance = random.uniform(ROAD_WIDTH / 2.0 + 2.0,
+                                       ROAD_WIDTH / 2.0 + 10.0)
+
+        spawn_x = car_x + forward_x * distance + side_x * random.choice([-side_distance, side_distance])
+        spawn_z = car_z + forward_z * distance + side_z * random.choice([-side_distance, side_distance])
 
         if is_in_school_or_hospital_zone(spawn_x, spawn_z) or is_near_obstacle(spawn_x, spawn_z):
             break
@@ -1160,6 +1235,7 @@ def update_and_draw_enemies(dt):
         if math.hypot(car_x - enemy['x'], car_z - enemy['z']) < 3.0:
             kill_pts = 10 if lvl == 1 else (15 if lvl == 2 else 25)
             score += kill_pts
+            enemies_killed += 1
             enemies.remove(enemy)
             take_car_damage(1)
             continue
@@ -1172,7 +1248,7 @@ def update_and_draw_enemies(dt):
 
 
 def update_and_draw_bullets(dt):
-    global bullets, player_bullets, enemies, score
+    global bullets, player_bullets, enemies, score, enemies_killed
     glColor3f(1.0, 0.8, 0.1)
     quad = gluNewQuadric()
 
@@ -1206,6 +1282,7 @@ def update_and_draw_bullets(dt):
             if math.hypot(pb['x'] - enemy['x'], pb['z'] - enemy['z']) < 3.0:
                 lvl = enemy['level']
                 score += 10 if lvl == 1 else (15 if lvl == 2 else 25)
+                enemies_killed += 1
                 enemies.remove(enemy)
                 hit_enemy = True
                 break
@@ -1350,17 +1427,81 @@ def update_sky():
     glFogfv(GL_FOG_COLOR, (r, g, b, 1.0))
 
 
+def reset_game():
+    global car_health, player_health, car_exploded, is_busted, score, enemies_killed, wanted_stars, police_active
+    global car_x, car_z, car_speed, car_heading, target_car_heading, drift_angle
+    global enemies, bullets, player_bullets, boosts, puddles
+
+    car_health = 5
+    player_health = 5.0
+    car_exploded = False
+    is_busted = False
+    score = 0
+    enemies_killed = 0
+    wanted_stars = 0
+    police_active = False
+
+    car_x, car_z = 0.0, 0.0
+    car_speed = 0.0
+    car_heading = 0.0
+    target_car_heading = 0.0
+    drift_angle = 0.0
+
+    enemies.clear()
+    bullets.clear()
+    player_bullets.clear()
+    boosts.clear()
+    puddles.clear()
+
+def get_aim_world_dir(x, y):
+    """Convert a window-space click/cursor position into a world-space aim
+    direction on the ground (XZ) plane, using the camera matrices from the
+    most recently rendered frame. This is what lets bullets travel to
+    wherever the player actually clicked on screen."""
+    viewport = glGetIntegerv(GL_VIEWPORT)
+    modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
+    projection = glGetDoublev(GL_PROJECTION_MATRIX)
+
+    win_y = viewport[3] - y  # GLUT gives y from the top; OpenGL wants it from the bottom
+
+    near_pt = gluUnProject(x, win_y, 0.0, modelview, projection, viewport)
+    far_pt = gluUnProject(x, win_y, 1.0, modelview, projection, viewport)
+
+    dir_x = far_pt[0] - near_pt[0]
+    dir_z = far_pt[2] - near_pt[2]
+    dist = math.hypot(dir_x, dir_z)
+    if dist < 1e-6:
+        rad_h = math.radians(car_heading)
+        return math.sin(rad_h), -math.cos(rad_h)  # fallback: straight ahead
+    return dir_x / dist, dir_z / dist
+
+
 def mouse_motion(x, y):
     global gun_angle
     if game_state == "PLAYING":
-        dx = x - (WINDOW_WIDTH / 2.0)
-        dy = (WINDOW_HEIGHT / 2.0) - y
-        target_angle = math.degrees(math.atan2(dx, dy))
-        gun_angle = max(-80.0, min(80.0, target_angle))
+        dir_x, dir_z = get_aim_world_dir(x, y)
+        world_aim_deg = math.degrees(math.atan2(dir_x, -dir_z))
+        rel_angle = (world_aim_deg - car_heading + 180.0) % 360.0 - 180.0
+        gun_angle = max(-80.0, min(80.0, rel_angle))
+
 
 
 def mouse(button, state, x, y):
     global game_state, player_bullets, wanted_stars, police_active, gun_angle
+    if game_state == "GAME_OVER":
+        if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+            gl_y = WINDOW_HEIGHT - y
+            if point_in_rect(x, gl_y, play_again_btn):
+                reset_game()  # Call a function to reset player stats
+                game_state = "PLAYING"
+                return
+
+            if point_in_rect(x, gl_y, game_over_quit_btn):
+                glutLeaveMainLoop()
+                return
+        return
+
+
     if game_state == "PAUSED":
         if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
             gl_y = WINDOW_HEIGHT - y
@@ -1371,17 +1512,14 @@ def mouse(button, state, x, y):
         return
 
     if game_state == "PLAYING" and button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
-        total_aim_deg = car_heading + gun_angle
-        rad_aim = math.radians(total_aim_deg)
-        bullet_fx = math.sin(rad_aim)
-        bullet_fz = -math.cos(rad_aim)
+        dir_x, dir_z = get_aim_world_dir(x, y)
 
         player_bullets.append({
-            'x': car_x + bullet_fx * 3.5,
+            'x': car_x + dir_x * 3.5,
             'y': 1.6,
-            'z': car_z + bullet_fz * 3.5,
-            'vx': bullet_fx * 140.0,
-            'vz': bullet_fz * 140.0
+            'z': car_z + dir_z * 3.5,
+            'vx': dir_x * 140.0,
+            'vz': dir_z * 140.0
         })
         if is_in_school_or_hospital_zone(car_x, car_z):
             wanted_stars = min(3, wanted_stars + 1)
@@ -1456,7 +1594,18 @@ def update_puddles():
 
     if len(puddles) < 3 and random.random() < 0.02:
         side_x = random.choice([-7.0, 7.0])
-        puddles.append({'x': side_x, 'z': car_z - random.uniform(50.0, 100.0), 'w': 4.5, 'd': 8.0})
+        rad_h = math.radians(car_heading)
+
+        forward_x = math.sin(rad_h)
+        forward_z = -math.cos(rad_h)
+
+        distance = random.uniform(50.0, 100.0)
+        puddles.append({
+            'x': car_x + forward_x * distance,
+            'z': car_z + forward_z * distance,
+            'w': 4.5,
+            'd': 8.0
+        })
 
     for p in puddles[:]:
         if p['z'] > car_z + 20.0:
@@ -1964,6 +2113,7 @@ def draw_top_hud():
     draw_hud_text(20, WINDOW_HEIGHT - 35, f"SPEED: {spd_val} KM/H", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.5, b=0.1)
     draw_hud_text(20, WINDOW_HEIGHT - 60, f"DISTANCE: {dist_val:.1f} KM", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.2)
     draw_hud_text(20, WINDOW_HEIGHT - 85, f"SCORE: {total_score}", font=GLUT_BITMAP_HELVETICA_18, r=0.2, g=1.0, b=0.4)
+    draw_hud_text(20, WINDOW_HEIGHT - 110, f"KILLS: {enemies_killed}", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.6, b=0.9)
 
     draw_hud_text(WINDOW_WIDTH - 280, WINDOW_HEIGHT - 30, "CAR HP:", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.3, b=0.3)
     for i in range(5):
@@ -1987,11 +2137,11 @@ def draw_top_hud():
         sy = WINDOW_HEIGHT - 22
         draw_star_symbol(sx, sy, size=12, active=(i < wanted_stars))
 
-    ci = round(car_x / CELL_SIZE)
-    cj = round(car_z / CELL_SIZE)
+    ci = round(car_x / (INTERSECTION_INTERVAL * CELL_SIZE)) * INTERSECTION_INTERVAL
+    cj = round(car_z / (INTERSECTION_INTERVAL * CELL_SIZE)) * INTERSECTION_INTERVAL
     dist_to_sig = math.hypot(car_x - ci * CELL_SIZE, car_z - cj * CELL_SIZE)
     if 15.0 < dist_to_sig < 75.0:
-        if get_traffic_states() == "red":
+        if get_traffic_states() in ("red", "yellow"):
             draw_hud_text(WINDOW_WIDTH // 2 - 120, WINDOW_HEIGHT - 90, "WARNING: Red Light Ahead!", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.1, b=0.1)
 
     if car_health <= 1:
@@ -2039,6 +2189,11 @@ def display():
 
     current_time = time.time()
     dt = min(current_time - last_frame_time, 0.1)
+
+    if game_state == "GAME_OVER" :
+        draw_game_over_overlay()
+        glutSwapBuffers()
+        return
 
     if game_state == "PLAYING":
         update_vehicle_physics()
@@ -2476,13 +2631,14 @@ def update_vehicle_physics():
         # Collision: stop forward/reverse movement
         car_speed = 0.0
 
-    ci = round(car_x / CELL_SIZE)
-    cj = round(car_z / CELL_SIZE)
+    ci = round(car_x / (INTERSECTION_INTERVAL * CELL_SIZE)) * INTERSECTION_INTERVAL
+    cj = round(car_z / (INTERSECTION_INTERVAL * CELL_SIZE)) * INTERSECTION_INTERVAL
     sig_node = (ci, cj)
     dist_to_sig = math.hypot(car_x - ci * CELL_SIZE, car_z - cj * CELL_SIZE)
     if  dist_to_sig < 10.0 :
 
-        if get_traffic_states() == "red" and sig_node not in passed_red_light_nodes:
+        light_state = get_traffic_states()
+        if light_state in ("red", "yellow") and sig_node not in passed_red_light_nodes:
             passed_red_light_nodes.add(sig_node)
             wanted_stars = min(3, wanted_stars + 1)
             police_active = True
@@ -2521,6 +2677,8 @@ def layout_pause_buttons():
 
     resume_btn = (cx - btn_w // 2, resume_y, cx + btn_w // 2, resume_y + btn_h)
     quit_btn   = (cx - btn_w // 2, quit_y,   cx + btn_w // 2, quit_y + btn_h)
+
+    layout_game_over_buttons()
 
 
 def init():
