@@ -1,7 +1,8 @@
 from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
-import random, math,time
+import random, math, time
+
 
 WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 800
@@ -9,9 +10,12 @@ time_of_day = 0.0  # what daytime is now? morning/noon/day
 ambient_light = 1.0  # change of environment color according to day time
 game_state = "PLAYING"
 
+
 # Button rectangles in screen pixels (x1, y1, x2, y2) — recalculated each resize
 resume_btn = (0, 0, 0, 0)
 quit_btn   = (0, 0, 0, 0)
+
+
 # ---------------- camera & vehicle mode ----------------
 car_x, car_z = 0.0, 0.0      # car position in world space
 cam_x, cam_z = 0.0, 15.0     # camera position in world space
@@ -19,36 +23,83 @@ cam_angle = 0.0              # fixed camera angle facing straight forward
 camera_mode = "3rd"          # "3rd" (3rd person view) or "1st" (1st person simulator view)
 current_rpm = 900.0          # Current engine RPM (800 - 8000 RPM)
 steering_wheel_angle = 0.0   # Visual steering wheel angle in FPV
-car_angle=0
-steer=0
+
+
 # ---------------- Rain System ----------------
 RAIN_COUNT = 1000 #number of raindrops stored
 raindrops = []
 is_raining = False
-# Wet weather physics multipliers
-WET_FRICTION_MULT = 0.35    # 65% reduction in tire friction (coasts much further)
-WET_ACCEL_MULT = 0.50       # 50% reduction in acceleration/braking grip
-WET_STEER_MULT = 0.40       # 60% reduction in turn steering sharp response
 last_rain_toggle = time.time() #duration between each rain
+
+
+# ---------------- Game Mechanics & Health System ----------------
+car_health = 5
+player_health = 5.0
+score = 0
+wanted_stars = 0
+police_active = False
+police_x, police_y, police_z = 0.0, 0.0, 0.0
+police_heading = 0.0
+consecutive_boosts = 0
+player_bullets = []
+boosts = []
+puddles = []
+uncontrolled_timer = 0.0
+passed_red_light_nodes = {(0, 0)}
+zone_speed_flag = False
+car_exploded = False
+is_busted = False
+last_boost_z = 0.0
+
+# Heading & Intersection Navigation
+target_car_heading = 0.0  # 0: North (-Z), 90: East (+X), 180: South (+Z), 270: West (-X)
+car_heading = 0.0
+last_turn_time = 0.0
+total_distance_travelled = 0.0
+
 
 car_speed = 0.0
 max_speed = 300.0         # Top forward speed (0 - 300 km/h)
 max_reverse_speed = -60.0 # Top reverse speed (km/h)
-acceleration = 18.0       # Acceleration build up rate
-deceleration = 32.0       # Coasting friction when no drive key is held
+acceleration = 5.0       # Acceleration build up rate (reduced for smooth realistic buildup)
+deceleration = 15.0       # Coasting friction when no drive key is held
 steering_speed = 3.0     # Sideways car movement speed (units/sec)
 
-INTERSECTION_INTERVAL = 3  # Continuous road grid on every block
-ROAD_DRAW_RADIUS = 3       # Optimal road rendering radius for fast 60+ FPS performance
 
-# Input tracking for WASD and 4 Arrow keys
-key_states = {'w': False, 's': False, 'a': False, 'd': False, 'up': False, 'down': False, 'left': False, 'right': False}
+INTERSECTION_INTERVAL = 3  # Distance between red light intersections (750 world units)
+ROAD_DRAW_RADIUS = 2       # Optimal road rendering radius for fast 60+ FPS performance
+
+
+# ---------------- Enemy & Bullets System ----------------
+MAX_ENEMIES = 2
+enemies = []
+bullets = []
+
+
+# Enemy shirt colors mapped by Level
+ENEMY_COLORS = {
+    1: (0.1, 0.8, 0.2),  # Level 1: Green shirt
+    2: (0.1, 0.3, 0.9),  # Level 2: Blue shirt
+    3: (0.9, 0.1, 0.1)   # Level 3: Red shirt
+}
+
+
+# Input tracking for WASD, 4 Arrow keys, Spacebar & Mouse Aiming
+key_states = {'w': False, 's': False, 'a': False, 'd': False, 'up': False, 'down': False, 'left': False, 'right': False, 'space': False}
+drift_angle = 0.0
+gun_angle = 0.0
 last_frame_time = time.time()
 
+#cheat mode
+cheat_mode = False
+cheat_speed = 90.0
+CHEAT_BULLET_COOLDOWN = 0.18
+CHEAT_VISION_DISTANCE = 150.0
+CHEAT_VISION_ANGLE = 45.0
+
+last_cheat_shot = 0.0
+
 # ---------------- world / road-grid data ----------------
-# Instead of one straight road, the city is an infinite grid of streets and blocks
-#  Every intersection is a 4-way turn, and the
-# grid streams in every direction forever as the car drives around.
 ROAD_WIDTH = 20.0
 FOOTPATH_WIDTH = 4.0
 CELL_SIZE = 150               # size of each block of buildings tree etc
@@ -58,9 +109,11 @@ BLOCK_MARGIN = ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH   # gap before buildable land s
 VIEW_RADIUS = 1                 # how many blocks out (in every direction) get streamed in
 PRUNE_MARGIN = VIEW_RADIUS + 2    # cached blocks further than this get droppeded
 
+
 # cache of generated blocks: {(bi, bj): {"trees": [...], "buildings": [...], "lamps": [...]}}
 block_cache = {}
 street_lamp_radius=[]
+
 BUILDING_COLORS = [
     (0.70, 0.70, 0.75),
     (0.80, 0.60, 0.50),
@@ -71,35 +124,33 @@ BUILDING_COLORS = [
     (0.85, 0.75, 0.55),
     (0.50, 0.55, 0.60),]
 
-#takes players position as input and returns the current block position
+
 def camera_block(cx, cz):
     return int(math.floor(cx / CELL_SIZE)), int(math.floor(cz / CELL_SIZE))
 
-#controls color shade according to day night
+
 def set_env_color(r, g, b):
     glColor3f(r * ambient_light, g * ambient_light, b * ambient_light)
 
-# each block of the world is controlled by this func & takes block num as input
-def generate_block(bi, bj):
 
+def generate_block(bi, bj):
     global INTERSECTION_INTERVAL, BLOCK_MARGIN
 
-    #ensures a particular block always has the same structure of buildings,trees
-    # Even if the block is deleted ,it will generate the deleted block with same layout again
+
     seed = (bi * 73856093) ^ (bj * 19349663) ^ 0x9E3779B9
     rnd = random.Random(seed)
 
-# this part determines the boundary coordinates of the block
+
     bx0 = bi * CELL_SIZE + BLOCK_MARGIN
     bx1 = (bi + 1) * CELL_SIZE - BLOCK_MARGIN
     bz0 = bj * CELL_SIZE + BLOCK_MARGIN
     bz1 = (bj + 1) * CELL_SIZE - BLOCK_MARGIN
 
-#area of the block in both axis to define the usable area in block
+
     area_w = bx1 - bx0
     area_d = bz1 - bz0
 
-#things inside the block
+
     trees = []
     buildings = []
     hospitals = []
@@ -110,38 +161,35 @@ def generate_block(bi, bj):
     road_signs=[]
     garage=[]
 
-    # inward block corners
+
     fz0 = bj * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
     fx0 = bi * CELL_SIZE + ROAD_WIDTH / 2.0 + FOOTPATH_WIDTH / 2.0
     fx1 = (bi + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
     fz1 = (bj + 1) * CELL_SIZE - ROAD_WIDTH / 2.0 - FOOTPATH_WIDTH / 2.0
 
-    #since intersection lvl=4 here so if bi,bj s position is  multiple of 4
-    # ensures i get road intersection after 4 or 8 or 12 etc blocks.after every 4 blocks
-    borders_road = (bi % INTERSECTION_INTERVAL == 0) or (bj % INTERSECTION_INTERVAL == 0)
 
-    # it decides will it generate hospita or school or a block of buildings near intersection
+    borders_road = (bi % INTERSECTION_INTERVAL == 0) or (bj % INTERSECTION_INTERVAL == 0)
     landmark_roll = rnd.random() if borders_road else 1.0
 
+
     if landmark_roll < 0.05:
-        # Spawn a Hospital in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
-        hospitals.append((x, z, 22.0, 22.0, 18.0))  #(x,z,width,depth,height)
+        hospitals.append((x, z, 22.0, 22.0, 18.0))
 
-        #puts the speed limit board
+
         road_signs.append((fx0, fz0+5, 0))
         road_signs.append((fx1, fz0+5, 0))
         road_signs.append((fx0 , fz1-5 , 0))
         road_signs.append((fx1, fz1-5, 0))
 
+
     elif landmark_roll < 0.1:
-        # Spawn a School in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
-        schools.append((x, z, 28.0, 16.0, 10.0))  # Long and low-rise structure
+        schools.append((x, z, 28.0, 16.0, 10.0))
 
-        #puts speed limit sign
+
         road_signs.append((fx0, fz0 + 5, 0))
         road_signs.append((fx1, fz0 + 5, 0))
         road_signs.append((fx0, fz1 - 5, 0))
@@ -149,29 +197,27 @@ def generate_block(bi, bj):
 
 
     elif landmark_roll < 0.13:
-        # Spawn a Garage in the center of the block
         x = (bx0 + bx1) / 2.0
         z = (bz0 + bz1) / 2.0
-        garage.append((x, z, 28.0, 16.0, 10.0))  # Long and low-rise structure
+        garage.append((x, z, 28.0, 16.0, 10.0))
+
 
     else:
-        #divides each block in smaller blocks with rows and cols
-        #each smaller blocks contains either tree/building/open space
         cols = max(1, int(area_w / 16))
         rows = max(1, int(area_d / 16))
         cw = area_w / cols
         cd = area_d / rows
 
+
         for gx in range(cols):
             for gz in range(rows):
                 cx0 = bx0 + gx * cw
                 cz0 = bz0 + gz * cd
-                #random positions preventing everything from being perfectly aligned
                 x = cx0 + rnd.uniform(cw * 0.25, cw * 0.75)
                 z = cz0 + rnd.uniform(cd * 0.25, cd * 0.75)
                 r = rnd.random()
 
-                #if r<0.22 -> tree , if r <0.88 -> building else open space
+
                 if r < 0.22:
                     height = rnd.uniform(5.0, 8.5)
                     kind = 'pine' if rnd.random() < 0.4 else 'round'
@@ -185,28 +231,27 @@ def generate_block(bi, bj):
                     buildings.append((x, z, w, d, h, color, win_seed))
 
 
-
         temp=7 #extra distance of lamps from corners
         lamps = [(fx0, fz0+temp), (fx1, fz0+temp), (fx0, fz1-temp), (fx1, fz1-temp),
                  ((fx0 + fx1) / 2.0, fz0+temp), ((fx0 + fx1) / 2.0, fz1-temp)]
-        LAMP_SPACING = 35.0  # Distance between consecutive street lamps along the block
-        inset = 10.0  # Distance from intersection corners to first street lamp
+        LAMP_SPACING = 35.0
+        inset = 10.0
 
-        #  Place lamps along North and South block edges
+
         z_pos = fz0 + inset
         while z_pos <= fz1 - inset:
-            street_lamps.append((fx0, z_pos, 90))  # Left side footpath
-            street_lamps.append((fx1, z_pos, -90))  # Right side footpath
+            street_lamps.append((fx0, z_pos, 90))
+            street_lamps.append((fx1, z_pos, -90))
             z_pos += LAMP_SPACING
 
-        #  Place lamps along East and West block edges
+
         x_pos = fx0 + inset
         while x_pos <= fx1 - inset:
-            street_lamps.append((x_pos, fz0, 0))  # Bottom side footpath
-            street_lamps.append((x_pos, fz1, 180))  # Top side footpath
+            street_lamps.append((x_pos, fz0, 0))
+            street_lamps.append((x_pos, fz1, 180))
             x_pos += LAMP_SPACING
 
-        # Only generate traffic lights at true road intersections
+            # Only generate traffic lights at true road intersections
         if bi % INTERSECTION_INTERVAL == 0 and bj % INTERSECTION_INTERVAL == 0:
             x = bi * CELL_SIZE
             z = bj * CELL_SIZE
@@ -218,7 +263,6 @@ def generate_block(bi, bj):
                 (x + offset, z + offset, 270),  # NE Corner facing West
                 (x - offset, z + offset, 180)  # NW Corner facing South
             ]
-
 
     return {
         "buildings": buildings,
@@ -233,44 +277,45 @@ def generate_block(bi, bj):
     }
 
 
-
 def stream_world(cx, cz):
-
     ci, cj = camera_block(cx, cz)
-    #generates the block around my current block
     for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
         for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
             if (bi, bj) not in block_cache:
                 block_cache[(bi, bj)] = generate_block(bi, bj)
-#gets rid of further blocks from the player.keeps upto 3 blocks
+
+
     stale = [key for key in block_cache
              if abs(key[0] - ci) > PRUNE_MARGIN or abs(key[1] - cj) > PRUNE_MARGIN]
     for key in stale:
         del block_cache[key]
 
+
     return ci, cj
 
 
 def update_time(value):
-    global time_of_day,game_state
+    global time_of_day, game_state
+
 
     if game_state == "PLAYING":
         time_of_day += 0.0005
-
         if time_of_day >= 1.0:
             time_of_day = 0.0
+
 
     glutPostRedisplay()
     glutTimerFunc(16, update_time, 0)
 
 
 def draw_button(rect, label):
-    x1, y1, x2, y2 = rect #react= button coordinates
+    x1, y1, x2, y2 = rect
     glColor3f(0.15, 0.15, 0.15)
     glBegin(GL_QUADS)
     glVertex2f(x1, y1); glVertex2f(x2, y1)
     glVertex2f(x2, y2); glVertex2f(x1, y2)
     glEnd()
+
 
     glColor3f(1, 1, 1)
     glLineWidth(2)
@@ -280,6 +325,7 @@ def draw_button(rect, label):
     glVertex2f(x2, y2)
     glVertex2f(x1, y2)
     glEnd()
+
 
     glRasterPos2f(x1 + 80, (y1 + y2) / 2 - 5)
     for ch in label:
@@ -292,12 +338,13 @@ def draw_pause_overlay():
     glLoadIdentity()
     gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
 
+
     glMatrixMode(GL_MODELVIEW)
     glPushMatrix()
     glLoadIdentity()
-
     glDisable(GL_DEPTH_TEST)
     glDisable(GL_FOG)
+
 
     glEnable(GL_BLEND)
     glColor4f(0, 0, 0, 0.6)
@@ -306,16 +353,20 @@ def draw_pause_overlay():
     glVertex2f(WINDOW_WIDTH, WINDOW_HEIGHT); glVertex2f(0, WINDOW_HEIGHT)
     glEnd()
 
+
     glColor3f(1, 1, 1)
     glRasterPos2f(WINDOW_WIDTH / 2 -40, WINDOW_HEIGHT / 2 + 150)
     for ch in "PAUSED":
         glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, ord(ch))
 
+
     draw_button(resume_btn, "Resume")
     draw_button(quit_btn, "Quit")
 
+
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_FOG)
+
 
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
@@ -327,7 +378,9 @@ def point_in_rect(px, py, rect):
     x1, y1, x2, y2 = rect
     return x1 <= px <= x2 and y1 <= py <= y2
 
+
 # ---------------- ground / road / footpaths ----------------
+
 
 def draw_ground(cx, cz):
     size = CELL_SIZE * (ROAD_DRAW_RADIUS + 3)
@@ -346,7 +399,9 @@ def draw_footpaths(ci, cj):
     lo = -(ROAD_DRAW_RADIUS + 2) * CELL_SIZE
     hi = (ROAD_DRAW_RADIUS + 2) * CELL_SIZE
 
+
     set_env_color(0.45, 0.45, 0.45)
+
 
     for i in range(ci - ROAD_DRAW_RADIUS - 1, ci + ROAD_DRAW_RADIUS + 2):
         if i % INTERSECTION_INTERVAL == 0:
@@ -373,11 +428,10 @@ def draw_roads(ci, cj):
     lo = -(ROAD_DRAW_RADIUS + 1) * CELL_SIZE
     hi = (ROAD_DRAW_RADIUS + 1) * CELL_SIZE
 
-    # Disable FOG so light blue fog never tints the black road
-    glDisable(GL_FOG)
 
-    # Pure 100% pitch black asphalt
+    glDisable(GL_FOG)
     set_env_color(0.01, 0.01, 0.01)
+
 
     for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
         if i % INTERSECTION_INTERVAL == 0:
@@ -398,10 +452,12 @@ def draw_roads(ci, cj):
             glVertex3f(ci * CELL_SIZE + lo, 0.021, z + half)
             glEnd()
 
+
     draw_lane_markings(ci, cj)
     draw_intersections(ci, cj)
 
-    glEnable(GL_FOG)  # Re-enable FOG for background scenery
+
+    glEnable(GL_FOG)
 
 
 def draw_lane_markings(ci, cj):
@@ -410,7 +466,7 @@ def draw_lane_markings(ci, cj):
     lo = -(ROAD_DRAW_RADIUS + 1) * CELL_SIZE
     hi = (ROAD_DRAW_RADIUS + 1) * CELL_SIZE
 
-    # dashed centre line along every north-south road
+
     glColor3f(1.0, 1.0, 1.0)
     for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
         if i % INTERSECTION_INTERVAL == 0:
@@ -426,7 +482,7 @@ def draw_lane_markings(ci, cj):
                 glEnd()
                 z -= step
 
-    # dashed centre line along every east-west road
+
     for j in range(cj - ROAD_DRAW_RADIUS, cj + ROAD_DRAW_RADIUS + 1):
         if j % INTERSECTION_INTERVAL == 0:
             z = j * CELL_SIZE
@@ -441,7 +497,7 @@ def draw_lane_markings(ci, cj):
                 glEnd()
                 x -= step
 
-    # yellow kerb/edge lines running the length of every road
+
     glColor3f(0.95, 0.85, 0.2)
     half = ROAD_WIDTH / 2.0 - 0.15
     for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
@@ -456,11 +512,12 @@ def draw_lane_markings(ci, cj):
                 glVertex3f(ex - 0.1, 0.022, cj * CELL_SIZE + lo)
                 glEnd()
 
-#make boxes with w,h and d as parameters
+
 def draw_box(cx, base_y, cz, w, h, d, color):
     x0, x1 = cx - w / 2, cx + w / 2
     y0, y1 = base_y, base_y + h
     z0, z1 = cz - d / 2, cz + d / 2
+
 
     faces = [
         ((0, 0, 1), [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]),  # front
@@ -472,6 +529,7 @@ def draw_box(cx, base_y, cz, w, h, d, color):
     ]
     set_env_color(*color)
 
+
     glBegin(GL_QUADS)
     for normal, verts in faces:
         glNormal3fv(normal)
@@ -479,67 +537,49 @@ def draw_box(cx, base_y, cz, w, h, d, color):
             glVertex3fv(v)
     glEnd()
 
-#draws text inside the slow sign
-def draw_3d_text(x, y, z, text, color=(0, 0, 0), scale=0.01,angle=0):
+
+def draw_3d_text(x, y, z, text, color=(0, 0, 0), scale=0.01, angle=0):
     glPushMatrix()
     glTranslatef(x, y, z)
     glRotatef(angle, 0, 1, 0)
     glColor3f(*color)
     glScalef(scale, scale, scale)
 
+
     for ch in text:
         glutStrokeCharacter(GLUT_STROKE_ROMAN, ord(ch))
     glPopMatrix()
 
-#draws the max speed sign near schools and hospitals
+
 def draw_slow_sign(cx, cz, angle=0):
     pole = (0.2, 0.2, 0.2)
     red = (0.9, 0.05, 0.05)
     white = (1.0, 1.0, 1.0)
     black = (0.05, 0.05, 0.05)
 
+
     glPushMatrix()
     glTranslatef(cx, 0, cz)
     glRotatef(angle, 0, 1, 0)
 
-    # Pole
+
     draw_box(0, 0, 0, 0.8, 4, 0.2, pole)
-
-    # Top red banner
     draw_box(0, 5.6, 0, 2.5, 0.5, 0.2, red)
-
-    # Speed-limit sign
     draw_box(0, 3.2, 0, 4.5, 2.8, 0.2, red)
-
-    # White inner area both front and back
     draw_box(0, 3.2, -0.12, 3.8, 2.4, 0.03, white)
     draw_box(0, 3.2, 0.12, 3.8, 2.4, 0.03, white)
 
-    # Max Speed & 20  both front and back side
-    draw_3d_text(
-        1.7, 4.9, -0.25,
-        "Max Speed",
-        color=black,
-        scale=0.005,angle=180)
-    draw_3d_text(
-        0.7, 3.5, -0.25,
-        "80",
-        color=black,
-        scale=0.012,angle=180)
+
+    draw_3d_text(1.7, 4.9, -0.25, "Max Speed", color=black, scale=0.005, angle=180)
+    draw_3d_text(0.7, 3.5, -0.25, "90", color=black, scale=0.012, angle=180)
+
 
     glPushMatrix()
     glRotatef(180, 0, 1, 0)
-    draw_3d_text(
-        1.7, 4.9, -0.25,
-        "Max Speed",
-        color=black,
-        scale=0.005,angle=180)
-    draw_3d_text(
-        0.7, 3.5, -0.25,
-        "80",
-        color=black,
-        scale=0.012,angle=180)
+    draw_3d_text(1.7, 4.9, -0.25, "Max Speed", color=black, scale=0.005, angle=180)
+    draw_3d_text(0.7, 3.5, -0.25, "90", color=black, scale=0.012, angle=180)
     glPopMatrix()
+
 
     glPopMatrix()
 
@@ -548,51 +588,34 @@ def draw_hospital(cx, cz):
     white = (0.9, 0.9, 0.9)
     red = (0.8, 0.05, 0.05)
 
-    glPushMatrix()
 
+    glPushMatrix()
     glTranslatef(cx, 0, cz)
     glScalef(1.4, 1.4, 1.4)
     glTranslatef(-cx, 0, -cz)
 
-    # Main building
-    draw_box(cx, 0, cz, 24, 10, 16, white)
 
-    # Upper block
+    draw_box(cx, 0, cz, 24, 10, 16, white)
     draw_box(cx, 10, cz, 14, 7, 12, white)
 
-    # RED CROSSES - 4 SIDES
 
-    # Front (+Z)
     draw_box(cx, 13.5, cz + 6.05, 5, 1.0, 0.1, red)
     draw_box(cx, 11.5, cz + 6.05, 1.2, 5, 0.1, red)
-
-    # Back (-Z)
     draw_box(cx, 13.5, cz - 6.05, 5, 1.0, 0.1, red)
     draw_box(cx, 11.5, cz - 6.05, 1.2, 5, 0.1, red)
-
-    # Right (+X)
     draw_box(cx + 7.05, 13.5, cz, 0.1, 1.0, 5, red)
     draw_box(cx + 7.05, 11.5, cz, 0.1, 5, 1.2, red)
-
-    # Left (-X)
     draw_box(cx - 7.05, 13.5, cz, 0.1, 1.0, 5, red)
     draw_box(cx - 7.05, 11.5, cz, 0.1, 5, 1.2, red)
 
-#writing of hospital
-    # Front (+Z)
+
     draw_3d_text(cx, 5, cz + 8.1, "HOSPITAL", red, 0.012, 0)
-
-    # Back (-Z)
     draw_3d_text(cx, 5, cz - 8.1, "HOSPITAL", red, 0.012, 180)
-
-    # Right (+X)
     draw_3d_text(cx + 12.1, 5, cz, "HOSPITAL", red, 0.012, 90)
-
-    # Left (-X)
     draw_3d_text(cx - 12.1, 5, cz, "HOSPITAL", red, 0.012, 270)
     glPopMatrix()
 
-    # Trees
+
     draw_tree(cx - 50, cz - 5, 6, "round")
     draw_tree(cx + 50, cz - 5, 6, "round")
     draw_tree(cx - 50, cz + 5, 5, "round")
@@ -603,91 +626,71 @@ def draw_school(cx, cz):
     white = (0.9, 0.85, 0.7)
     blue = (0.3, 0.65, 0.85)
 
-    glPushMatrix()
 
-    # Scale school around its center
+    glPushMatrix()
     glTranslatef(cx, 0, cz)
     glScalef(2.5, 2.5, 2.5)
     glTranslatef(-cx, 0, -cz)
+
 
     draw_box(cx, 0, cz, 30, 8, 14, brick)
     draw_box(cx, 8, cz, 31, 0.6, 15, white)
     draw_box(cx, 3.5, cz + 7.1, 24, 3, 0.1, blue)
     draw_box(cx, 0, cz + 7.2, 4, 4, 0.2, white)
 
-    # Writing of SCHOOL
 
-    # Front (+Z)
     draw_3d_text(cx, 4, cz + 7.1, "SCHOOL", white, 0.012, 0)
-
-    # Back (-Z)
     draw_3d_text(cx, 4, cz - 7.1, "SCHOOL", white, 0.012, 180)
-
-    # Right (+X)
     draw_3d_text(cx + 15.1, 4, cz, "SCHOOL", white, 0.012, 90)
-
-    # Left (-X)
     draw_3d_text(cx - 15.1, 4, cz, "SCHOOL", white, 0.012, 270)
     glPopMatrix()
 
-    # Trees
+
     draw_tree(cx - 50, cz - 4, 6, "round")
     draw_tree(cx + 50, cz - 4, 6, "round")
     draw_tree(cx - 50, cz + 4, 5, "round")
     draw_tree(cx + 50, cz + 4, 5, "round")
 
-#garage
+
 def draw_garage(cx, cz):
     gray = (0.35, 0.35, 0.35)
     dark_gray = (0.15, 0.15, 0.15)
     white = (0.9, 0.9, 0.9)
     yellow = (0.9, 0.7, 0.05)
 
-    glPushMatrix()
 
-    # Scale garage around its center
+    glPushMatrix()
     glTranslatef(cx, 0, cz)
     glScalef(2.0, 2.0, 2.0)
     glTranslatef(-cx, 0, -cz)
 
-    # Main garage
+
     draw_box(cx, 0, cz, 24, 10, 18, gray)
-
-    # Roof
     draw_box(cx, 10, cz, 26, 1, 20, dark_gray)
-
-    # Front garage door (+Z)
     draw_box(cx, 5, cz + 9.1, 16, 8, 0.2, dark_gray)
 
-    # Garage door horizontal lines
+
     for y in [2, 4, 6, 8]:
         draw_box(cx, y, cz + 9.25, 15.5, 0.15, 0.1, white)
 
-    # GARAGE text - 4 sides
-    # Front (+Z)
+
     draw_3d_text(cx - 4, 6.5, cz + 9.2,"GARAGE", yellow, 0.016, 0)
-
-    # Back (-Z)
     draw_3d_text(cx + 4, 6.5, cz - 9.2,"GARAGE", yellow, 0.016, 180)
-
-    # Right (+X)
     draw_3d_text(cx + 12.1, 6.5, cz + 4,"GARAGE", yellow, 0.016, 90)
-
-    # Left (-X)
     draw_3d_text(cx - 12.1, 6.5, cz - 4,"GARAGE", yellow, 0.016, 270)
     glPopMatrix()
+
 
     draw_tree(cx - 50, cz - 4, 6, "round")
     draw_tree(cx + 50, cz - 4, 6, "round")
     draw_tree(cx - 50, cz + 4, 5, "round")
     draw_tree(cx + 50, cz + 4, 5, "round")
 
-#lines on roads
-def draw_intersections(ci, cj):
-    #Zebra crossings + stop lines on every approach of every visible intersection of roads
 
-    stripe_w, stripe_len, gap = 0.6,  ROAD_WIDTH - 2.0, 0.6
+def draw_intersections(ci, cj):
+    stripe_w, stripe_len, gap = 0.6, ROAD_WIDTH - 2.0, 0.6
     inset = ROAD_WIDTH / 2.0 + 0.6
+
 
     glColor3f(0.95, 0.95, 0.9)
     for i in range(ci - ROAD_DRAW_RADIUS, ci + ROAD_DRAW_RADIUS + 1):
@@ -718,14 +721,17 @@ def draw_intersections(ci, cj):
                         glVertex3f(gx - stripe_w / 2, 0.03, gz + 0.6)
                         glEnd()
 
-#if the trafficlight is green red or yellow
+
 def get_traffic_states():
+    if cheat_mode:
+        return "green"
     TRAFFIC_GREEN_TIME = 6
     TRAFFIC_YELLOW_TIME = 3
     TRAFFIC_RED_TIME = 6
     t=time.time()
     cycle=TRAFFIC_GREEN_TIME+TRAFFIC_YELLOW_TIME+TRAFFIC_RED_TIME
     t=t%cycle
+
 
     if t<TRAFFIC_GREEN_TIME:
         return "green"
@@ -739,12 +745,14 @@ def draw_tree(x, z, height, kind):
     glPushMatrix()
     glTranslatef(x, 0, z)
 
+
     set_env_color(0.45, 0.28, 0.13)
     quad = gluNewQuadric()
     glPushMatrix()
     glRotatef(-90, 1, 0, 0)
     gluCylinder(quad, 0.5, 0.4, height * 0.5, 8, 1)
     glPopMatrix()
+
 
     if kind == 'pine':
         set_env_color(0.08, 0.4, 0.18)
@@ -762,6 +770,7 @@ def draw_tree(x, z, height, kind):
         gluCylinder(quad, height * 0.35, 0.0, height * 1.0, 10, 1)
         glPopMatrix()
 
+
     glPopMatrix()
 
 
@@ -775,8 +784,10 @@ def draw_windows(hw, hd, h, seed):
     margin = 1.2
     spacing_x, spacing_y = 1.9, 2.5
 
+
     rows = max(1, int((h - 2 * margin) / spacing_y))
     cols = max(1, int((2 * hw - 2 * margin) / spacing_x))
+
 
     glBegin(GL_QUADS)
     for row in range(rows):
@@ -797,12 +808,13 @@ def draw_building(x, z, w, d, h, color, win_seed):
     glPushMatrix()
     glTranslatef(x, 0, z)
 
-    # Main building body
+
     draw_box(0, 0, 0, w, h, d, color)
 
-    # Roof
+
     roof_color = tuple(min(1.0, c * 0.75) for c in color)
     set_env_color(*roof_color)
+
 
     glBegin(GL_QUADS)
     glVertex3f(-w/2, h, -d/2)
@@ -811,15 +823,18 @@ def draw_building(x, z, w, d, h, color, win_seed):
     glVertex3f(-w/2, h, d/2)
     glEnd()
 
-    # Windows
+
     draw_windows(w/2, d/2, h, win_seed)
 
+
     glPopMatrix()
+
 
 def draw_lamp(x, z):
     glPushMatrix()
     glTranslatef(x, 0, z)
     quad = gluNewQuadric()
+
 
     glColor3f(0.2, 0.2, 0.2)
     glPushMatrix()
@@ -827,12 +842,11 @@ def draw_lamp(x, z):
     gluCylinder(quad, 0.15, 0.12, 4.0, 6, 1)
     glPopMatrix()
 
+
     glTranslatef(0, 4.0, 0)
     glColor3f(1.0, 0.95, 0.6)
     glutSolidSphere(0.25, 8, 8)
     glPopMatrix()
-
-
 
 
 def draw_lamp_glow(radius=10.0):
@@ -845,11 +859,11 @@ def draw_lamp_glow(radius=10.0):
     glDepthMask(GL_FALSE)
     glBegin(GL_TRIANGLE_FAN)
 
-    # Bright warm center
+
     glColor4f(1.0, 0.85, 0.3, 0.45 * night_factor)
     glVertex3f(0.0, 0.03, 0.0)
 
-    # Soft edge falloff
+
     glColor4f(1.0, 0.8, 0.2, 0.0)
     segments = 16
     for i in range(segments + 1):
@@ -858,48 +872,44 @@ def draw_lamp_glow(radius=10.0):
         gz = math.sin(angle) * radius
         glVertex3f(gx, 0.03, gz)
 
+
     glEnd()
     glDepthMask(GL_TRUE)
 
 
-
 def draw_Street_lamp(x, z, angle):
-
     glPushMatrix()
     glTranslatef(x, 0, z)
     glRotatef(angle, 0, 1, 0)
-
-    glScalef(1.5, 1.5, 1.5)  # Makes the entire lamp 1.5x bigger
-
+    glScalef(1.5, 1.5, 1.5)
     quad = gluNewQuadric()
 
-    # 1. Main Vertical Pole
     glColor3f(0.25, 0.25, 0.28)
     glPushMatrix()
     glRotatef(-90, 1, 0, 0)
     gluCylinder(quad, 0.22, 0.16, 8.0, 10, 1)
     glPopMatrix()
 
-    # 2. Arm extending forward toward the road (+X direction)
+
     glPushMatrix()
     glTranslatef(0, 8.0, 0)
     glRotatef(180, 0, 1, 0)
     gluCylinder(quad, 0.15, 0.10, 3.0, 10, 1)
     glPopMatrix()
 
-    # 3. Lamp head at end of arm
+
     glPushMatrix()
     glRotatef(90, 0, 1, 0)
     glTranslatef(3.0, 8.0, 0)
 
-    # Housing
+
     glColor3f(0.15, 0.15, 0.17)
     glPushMatrix()
     glScalef(1.4, 0.25, 0.7)
     glutSolidCube(1)
     glPopMatrix()
 
-    # Bottom Glowing Light Pad
+
     glColor3f(1.0, 0.9, 0.6)
     glBegin(GL_QUADS)
     glVertex3f(-0.6, -0.13, -0.3)
@@ -908,12 +918,11 @@ def draw_Street_lamp(x, z, angle):
     glVertex3f(-0.6, -0.13, 0.3)
     glEnd()
 
+
     glPopMatrix()
     gluDeleteQuadric(quad)
 
-    # --- 4. GROUND LIGHT POOL (Local Coordinates) ---
-    # In unscaled local space, the arm projects 4.5 units along +X.
-    # We draw the pool directly on the road surface underneath the lamp head:
+
     glPushMatrix()
     glTranslatef(0, 0, -4.0)
     draw_lamp_glow(radius=8.0)
@@ -923,12 +932,13 @@ def draw_Street_lamp(x, z, angle):
     glPopMatrix()
 
 
-def draw_traffic_light(x, z,rotation, state):
+def draw_traffic_light(x, z, rotation, state):
     glPushMatrix()
     glTranslatef(x, 0, z)
     glRotatef(rotation, 0, 1, 0)
     glScalef(2.5, 1.5, 2.5)
-    # Pole
+
+
     glColor3f(0.15, 0.15, 0.15)
     glBegin(GL_QUADS)
     glVertex3f(-0.12, 0, -0.12)
@@ -941,7 +951,7 @@ def draw_traffic_light(x, z,rotation, state):
     glVertex3f(-0.12, 5, 0.12)
     glEnd()
 
-    # Traffic light box
+
     glColor3f(0.03, 0.03, 0.03)
     glPushMatrix()
     glTranslatef(0, 5, 0)
@@ -949,7 +959,7 @@ def draw_traffic_light(x, z,rotation, state):
     glutSolidCube(1)
     glPopMatrix()
 
-    # Red
+
     if state == "red":
         glColor3f(1, 0, 0)
     else:
@@ -959,7 +969,7 @@ def draw_traffic_light(x, z,rotation, state):
     glutSolidSphere(0.18, 12, 12)
     glPopMatrix()
 
-    # Yellow
+
     if state == "yellow":
         glColor3f(1, 1, 0)
     else:
@@ -969,7 +979,7 @@ def draw_traffic_light(x, z,rotation, state):
     glutSolidSphere(0.18, 12, 12)
     glPopMatrix()
 
-    # Green
+
     if state == "green":
         glColor3f(0, 1, 0)
     else:
@@ -979,65 +989,301 @@ def draw_traffic_light(x, z,rotation, state):
     glutSolidSphere(0.18, 12, 12)
     glPopMatrix()
 
+
     glPopMatrix()
+
+
+# ---------------- 3D Cuboid Enemy Renderer ----------------
+
+
+def draw_cuboid_enemy(enemy):
+    x, y, z = enemy['x'], enemy['y'], enemy['z']
+    level = enemy['level']
+    shirt_color = ENEMY_COLORS.get(level, (0.5, 0.5, 0.5))
+
+
+    skin_color = (0.9, 0.7, 0.5)
+    pants_color = (0.15, 0.15, 0.2)
+
+
+    glPushMatrix()
+    glTranslatef(x, y, z)
+
+
+    # 1. Legs (Left & Right Cuboids)
+    draw_box(-0.35, 0.0, 0.0, 0.4, 1.2, 0.4, pants_color)
+    draw_box( 0.35, 0.0, 0.0, 0.4, 1.2, 0.4, pants_color)
+
+
+    # 2. Torso/Shirt (Level Differentiated Cuboid)
+    draw_box(0.0, 1.2, 0.0, 1.2, 1.4, 0.6, shirt_color)
+
+
+    # 3. Arms (Left & Right Cuboids)
+    draw_box(-0.8, 1.2, 0.0, 0.3, 1.2, 0.3, skin_color)
+    draw_box( 0.8, 1.2, 0.0, 0.3, 1.2, 0.3, skin_color)
+
+
+    # 4. Head (Cuboid)
+    draw_box(0.0, 2.6, 0.0, 0.7, 0.7, 0.7, skin_color)
+
+
+    # 5. Floating Level Text Over Head
+    text_str = f"LVL {level}"
+    draw_3d_text(0.6, 3.8, 0.0, text_str, color=(1.0, 1.0, 1.0), scale=0.007, angle=0)
+    draw_3d_text(-0.6, 3.8, 0.0, text_str, color=(1.0, 1.0, 1.0), scale=0.007, angle=180)
+
+
+    glPopMatrix()
+
+
+def take_car_damage(amount=1):
+    global car_health, player_health, car_exploded, game_state
+    car_health = max(0, car_health - amount)
+    player_health = max(0.0, player_health - amount * 0.5)
+    if car_health <= 0 or player_health <= 0:
+        car_exploded = True
+        game_state = "GAME_OVER"
+
+
+def is_in_school_or_hospital_zone(cx, cz):
+    ci, cj = camera_block(cx, cz)
+    for bi in range(ci - 1, ci + 2):
+        for bj in range(cj - 1, cj + 2):
+            block = block_cache.get((bi, bj))
+            if block:
+                for (hx, hz, w, d, h) in block.get("hospitals", []):
+                    if math.hypot(cx - hx, cz - hz) < 55.0:
+                        return True
+                for (sx, sz, w, d, h) in block.get("schools", []):
+                    if math.hypot(cx - sx, cz - sz) < 55.0:
+                        return True
+    return False
+
+
+def is_near_obstacle(x, z):
+    ci, cj = camera_block(x, z)
+    block = block_cache.get((ci, cj))
+    if not block:
+        return False
+    for (lx, lz, angle) in block.get("street_lamps", []):
+        if math.hypot(x - lx, z - lz) < 4.0:
+            return True
+    for (bx, bz, w, d, h, color, win_seed) in block.get("buildings", []):
+        if abs(x - bx) < w/2.0 + 2.0 and abs(z - bz) < d/2.0 + 2.0:
+            return True
+    return False
+
+
+def update_and_draw_enemies(dt):
+    global enemies, bullets, score, car_z, car_x, total_distance_travelled
+    current_t = time.time()
+    dist_km = total_distance_travelled / 10.0
+
+    allowed_levels = []
+    if dist_km >= 150.0:
+        allowed_levels = [1, 2, 3]
+    elif dist_km >= 100.0:
+        allowed_levels = [3]
+    elif dist_km >= 75.0:
+        allowed_levels = [1, 2]
+    elif dist_km >= 65.0:
+        allowed_levels = [2]
+    elif dist_km >= 35.0:
+        allowed_levels = [1]
+
+    target_max = 2 if allowed_levels else 0
+
+    while len(enemies) < target_max and allowed_levels:
+        spawn_lvl = random.choice(allowed_levels)
+        side = random.choice([-1, 1])
+        spawn_x = side * random.uniform(ROAD_WIDTH / 2.0 + 2.0, ROAD_WIDTH / 2.0 + 10.0)
+        spawn_z = car_z - random.uniform(60.0, 110.0)
+
+        if is_in_school_or_hospital_zone(spawn_x, spawn_z) or is_near_obstacle(spawn_x, spawn_z):
+            break
+
+        overlap = False
+        for existing in enemies:
+            if math.hypot(spawn_x - existing['x'], spawn_z - existing['z']) < 6.0:
+                overlap = True
+                break
+        if overlap:
+            break
+
+        enemies.append({
+            'x': spawn_x,
+            'y': 0.0,
+            'z': spawn_z,
+            'level': spawn_lvl,
+            'last_shot': current_t,
+            'shot_once': False
+        })
+
+    for enemy in enemies[:]:
+        lvl = enemy['level']
+        cooldown = 2.0 if lvl == 1 else (1.5 if lvl == 2 else 0.8)
+        bullet_speed = 35.0 if lvl == 1 else (45.0 if lvl == 2 else 60.0)
+
+        if lvl == 1:
+            if not enemy['shot_once']:
+                dx = car_x - enemy['x']
+                dz = car_z - enemy['z']
+                dist = math.hypot(dx, dz)
+                if dist > 0.01:
+                    bullets.append({'x': enemy['x'], 'y': 1.5, 'z': enemy['z'], 'vx': (dx/dist)*bullet_speed, 'vz': (dz/dist)*bullet_speed})
+                enemy['shot_once'] = True
+            enemy['z'] += 5.0 * dt
+        elif lvl == 2:
+            dx = car_x - enemy['x']
+            dz = car_z - enemy['z']
+            dist = math.hypot(dx, dz)
+            if dist > 30.0:
+                enemy['z'] += 6.0 * dt
+            if dist < 80.0 and (current_t - enemy['last_shot'] >= cooldown):
+                if dist > 0.01:
+                    bullets.append({'x': enemy['x'], 'y': 1.5, 'z': enemy['z'], 'vx': (dx/dist)*bullet_speed, 'vz': (dz/dist)*bullet_speed})
+                enemy['last_shot'] = current_t
+        elif lvl == 3:
+            dx = car_x - enemy['x']
+            dz = car_z - enemy['z']
+            dist = math.hypot(dx, dz)
+            if dist > 0.01:
+                dir_x = dx / dist
+                dir_z = dz / dist
+                enemy['x'] += dir_x * 12.0 * dt
+                enemy['z'] += dir_z * 12.0 * dt
+                if current_t - enemy['last_shot'] >= cooldown:
+                    bullets.append({'x': enemy['x'], 'y': 1.5, 'z': enemy['z'], 'vx': dir_x * bullet_speed, 'vz': dir_z * bullet_speed})
+                    enemy['last_shot'] = current_t
+
+        if math.hypot(car_x - enemy['x'], car_z - enemy['z']) < 3.0:
+            kill_pts = 10 if lvl == 1 else (15 if lvl == 2 else 25)
+            score += kill_pts
+            enemies.remove(enemy)
+            take_car_damage(1)
+            continue
+
+        if enemy['z'] > car_z + 20.0:
+            enemies.remove(enemy)
+            continue
+
+        draw_cuboid_enemy(enemy)
+
+
+def update_and_draw_bullets(dt):
+    global bullets, player_bullets, enemies, score
+    glColor3f(1.0, 0.8, 0.1)
+    quad = gluNewQuadric()
+
+    # Enemy Bullets
+    for b in bullets[:]:
+        b['x'] += b['vx'] * dt
+        b['z'] += b['vz'] * dt
+
+        if math.hypot(b['x'] - car_x, b['z'] - car_z) < 2.5:
+            take_car_damage(1)
+            bullets.remove(b)
+            continue
+
+        if math.hypot(b['x'] - car_x, b['z'] - car_z) > 120.0:
+            bullets.remove(b)
+            continue
+
+        glPushMatrix()
+        glTranslatef(b['x'], b['y'], b['z'])
+        gluSphere(quad, 0.35, 8, 8)
+        glPopMatrix()
+
+    # Player Bullets
+    glColor3f(0.2, 0.9, 1.0)
+    for pb in player_bullets[:]:
+        pb['x'] += pb.get('vx', 0.0) * dt
+        pb['z'] += pb.get('vz', -120.0) * dt
+
+        hit_enemy = False
+        for enemy in enemies[:]:
+            if math.hypot(pb['x'] - enemy['x'], pb['z'] - enemy['z']) < 3.0:
+                lvl = enemy['level']
+                score += 10 if lvl == 1 else (15 if lvl == 2 else 25)
+                enemies.remove(enemy)
+                hit_enemy = True
+                break
+
+        if hit_enemy:
+            player_bullets.remove(pb)
+            continue
+
+        if math.hypot(pb['x'] - car_x, pb['z'] - car_z) > 120.0:
+            player_bullets.remove(pb)
+            continue
+
+        glPushMatrix()
+        glTranslatef(pb['x'], pb['y'], pb['z'])
+        gluSphere(quad, 0.35, 8, 8)
+        glPopMatrix()
+
+    gluDeleteQuadric(quad)
 
 
 def update_rain(dt):
     global is_raining, last_rain_toggle
 
-    #toggle rain after random time
+
     if time.time() - last_rain_toggle >= random.uniform(30,50):
         is_raining = not is_raining
         last_rain_toggle = time.time()
 
+
     if not is_raining:
         return
 
-    # Update particle positions and wrap them around the moving camera
-    for drop in raindrops:
-        drop[1] -= drop[3] * dt  # Fall vertically down
 
-        # Respawn drop at the top if it hits the ground
+    for drop in raindrops:
+        drop[1] -= drop[3] * dt
+
+
         if drop[1] < 0:
             drop[1] = random.uniform(40, 50)
             drop[0] = cam_x + random.uniform(-80, 80)
-            drop[z_idx := 2] = cam_z + random.uniform(-80, 80)
+            drop[2] = cam_z + random.uniform(-80, 80)
 
-        # Keep rain box centered dynamically around the camera position
+
         if abs(drop[0] - cam_x) > 80:
             drop[0] = cam_x + random.uniform(-80, 80)
         if abs(drop[2] - cam_z) > 80:
             drop[2] = cam_z + random.uniform(-80, 80)
 
 
+
 def draw_rain():
     if not is_raining:
         return
 
-    glDepthMask(GL_FALSE)  # Disable depth writes for clean alpha blending
+
+    glDepthMask(GL_FALSE)
     glLineWidth(1.2)
 
-    # Semi-transparent translucent light blue/white rain strands
+
     glColor4f(0.7, 0.8, 0.95, 0.4)
+
 
     glBegin(GL_LINES)
     for x, y, z, speed, length in raindrops:
         glVertex3f(x, y, z)
-        # Slight slant in movement to simulate realistic wind drop streak
         glVertex3f(x - 0.1, y - length, z - 0.1)
     glEnd()
+
 
     glDepthMask(GL_TRUE)
 
 
 def draw_world(ci, cj):
-    global street_lamp_radius
     for bi in range(ci - VIEW_RADIUS, ci + VIEW_RADIUS + 1):
         for bj in range(cj - VIEW_RADIUS, cj + VIEW_RADIUS + 1):
             block = block_cache.get((bi, bj))
             if not block:
                 continue
-            # Draw unique landmark buildings
             for (x, z, w, d, h) in block.get("hospitals", []):
                 draw_hospital(x, z)
             for (x, z, w, d, h) in block.get("schools", []):
@@ -1050,12 +1296,12 @@ def draw_world(ci, cj):
                 draw_lamp(x, z)
             for (x, z, angle) in block["street_lamps"]:
                 rad = math.radians(angle)
-                light_x=x+math.sin(rad)*4.5
+                light_x = x + math.sin(rad) * 4.5
                 light_z = z - math.cos(rad) * 4.5
-                street_lamp_radius.append((light_x,light_z))
+                street_lamp_radius.append((light_x, light_z))
                 draw_Street_lamp(x, z, angle)
-            for (x, z,rotation )in block["traffic_lights"]:
-                draw_traffic_light(x,z,rotation,get_traffic_states())
+            for (x, z, rotation) in block["traffic_lights"]:
+                draw_traffic_light(x, z, rotation, get_traffic_states())
             for (x, z, angle) in block["road_signs"]:
                 draw_slow_sign(x, z, angle)
             for (x, z, w, d, h) in block.get("garage", []):
@@ -1067,57 +1313,83 @@ def lerp(a, b, t):
 
 
 def smoothstep(t):
-    # Smooth ease-in / ease-out curve
     return t * t * (3 - 2 * t)
 
 
 def update_sky():
-    global time_of_day,ambient_light
+    global time_of_day, ambient_light
     colors = [
-        (0.60, 0.85, 0.9),  # DAY: Vibrant sky blue
-        (0.89, 0.59, 0.35),  # DUSK: Deep fiery orange/crimson
-        (0.01, 0.02, 0.06),  # NIGHT: Near black indigo
-        (0.3, 0.32, 0.5)  # DAWN: Warm peach/amber
+        (0.60, 0.85, 0.9),  # DAY
+        (0.89, 0.59, 0.35), # DUSK
+        (0.01, 0.02, 0.06), # NIGHT
+        (0.3, 0.32, 0.5)    # DAWN
     ]
     ambient_levels = [1.0, 0.55, 0.20, 0.55]
-    # Determine segment index (0 to 3) and local parameter t
     segment = int(time_of_day * 4) % 4
     t = (time_of_day * 4) % 1.0
 
-    # Apply non-linear easing to 't' for a natural rate of transition
+
     t_eased = smoothstep(t)
 
-    # Get start and end colors for current phase
+
     c1 = colors[segment]
     c2 = colors[(segment + 1) % 4]
 
-    # Interpolate each channel
+
     r = lerp(c1[0], c2[0], t_eased)
     g = lerp(c1[1], c2[1], t_eased)
     b = lerp(c1[2], c2[2], t_eased)
 
-    # Interpolate ambient lighting factor
+
     a1 = ambient_levels[segment]
     a2 = ambient_levels[(segment + 1) % 4]
     ambient_light = lerp(a1, a2, t_eased)
 
-    # update sky
+
     glClearColor(r, g, b, 1.0)
-    #  Update fog color to match the sky!
     glFogfv(GL_FOG_COLOR, (r, g, b, 1.0))
 
 
+def mouse_motion(x, y):
+    global gun_angle
+    if game_state == "PLAYING":
+        dx = x - (WINDOW_WIDTH / 2.0)
+        dy = (WINDOW_HEIGHT / 2.0) - y
+        target_angle = math.degrees(math.atan2(dx, dy))
+        gun_angle = max(-80.0, min(80.0, target_angle))
+
+
 def mouse(button, state, x, y):
-    global game_state
-    if game_state != "PAUSED" or button != GLUT_LEFT_BUTTON or state != GLUT_DOWN:
+    global game_state, player_bullets, wanted_stars, police_active, gun_angle
+    if game_state == "PAUSED":
+        if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+            gl_y = WINDOW_HEIGHT - y
+            if point_in_rect(x, gl_y, resume_btn):
+                game_state = "PLAYING"
+            elif point_in_rect(x, gl_y, quit_btn):
+                glutLeaveMainLoop()
         return
-    gl_y = WINDOW_HEIGHT - y
-    if point_in_rect(x, gl_y, resume_btn):
-        game_state = "PLAYING"
-    elif point_in_rect(x, gl_y, quit_btn):
-        glutLeaveMainLoop()
+
+    if game_state == "PLAYING" and button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+        total_aim_deg = car_heading + gun_angle
+        rad_aim = math.radians(total_aim_deg)
+        bullet_fx = math.sin(rad_aim)
+        bullet_fz = -math.cos(rad_aim)
+
+        player_bullets.append({
+            'x': car_x + bullet_fx * 3.5,
+            'y': 1.6,
+            'z': car_z + bullet_fz * 3.5,
+            'vx': bullet_fx * 140.0,
+            'vz': bullet_fz * 140.0
+        })
+        if is_in_school_or_hospital_zone(car_x, car_z):
+            wanted_stars = min(3, wanted_stars + 1)
+            police_active = True
+
 
 # ---------------- HUD & Dashboard Helper Functions ----------------
+
 
 def draw_hud_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=1.0):
     glColor3f(r, g, b)
@@ -1141,10 +1413,108 @@ def draw_hud_circle(cx, cy, radius, num_segments=36, fill=False, r=1.0, g=1.0, b
 
 # ---------------- 3D Car Model ----------------
 
+
+def update_boosts():
+    global boosts, last_boost_z, car_speed, wanted_stars, police_active, consecutive_boosts
+    if abs(car_z - last_boost_z) >= random.uniform(50.0, 80.0):
+        boost_x = random.choice([-5.0, 0.0, 5.0])
+        boosts.append({'x': boost_x, 'z': car_z - 120.0, 'active': True})
+        last_boost_z = car_z
+
+    for b in boosts[:]:
+        if b['z'] > car_z + 20.0:
+            boosts.remove(b)
+            continue
+        if b['active'] and math.hypot(car_x - b['x'], car_z - b['z']) < 3.0:
+            b['active'] = False
+            car_speed = min(max_speed, car_speed + 80.0)
+            if wanted_stars > 0:
+                consecutive_boosts += 1
+                if consecutive_boosts >= 2:
+                    wanted_stars = 0
+                    police_active = False
+                    consecutive_boosts = 0
+            boosts.remove(b)
+
+
+def draw_boosts():
+    for b in boosts:
+        if not b.get('active', True):
+            continue
+        glPushMatrix()
+        glTranslatef(b['x'], 0.6, b['z'])
+        glRotatef((time.time() * 120.0) % 360, 0, 1, 0)
+        draw_box(0, 0, 0, 1.2, 1.2, 1.2, (1.0, 0.85, 0.1))
+        glPopMatrix()
+
+
+def update_puddles():
+    global puddles, uncontrolled_timer
+    if not is_raining:
+        puddles.clear()
+        return
+
+    if len(puddles) < 3 and random.random() < 0.02:
+        side_x = random.choice([-7.0, 7.0])
+        puddles.append({'x': side_x, 'z': car_z - random.uniform(50.0, 100.0), 'w': 4.5, 'd': 8.0})
+
+    for p in puddles[:]:
+        if p['z'] > car_z + 20.0:
+            puddles.remove(p)
+            continue
+        if abs(car_x - p['x']) < p['w']/2.0 + 1.2 and abs(car_z - p['z']) < p['d']/2.0 + 2.0:
+            uncontrolled_timer = 4.5
+
+
+def draw_puddles():
+    if not is_raining:
+        return
+    glDisable(GL_FOG)
+    glEnable(GL_BLEND)
+    glColor4f(0.15, 0.35, 0.55, 0.65)
+    for p in puddles:
+        glBegin(GL_QUADS)
+        glVertex3f(p['x'] - p['w']/2, 0.028, p['z'] + p['d']/2)
+        glVertex3f(p['x'] + p['w']/2, 0.028, p['z'] + p['d']/2)
+        glVertex3f(p['x'] + p['w']/2, 0.028, p['z'] - p['d']/2)
+        glVertex3f(p['x'] - p['w']/2, 0.028, p['z'] - p['d']/2)
+        glEnd()
+    glEnable(GL_FOG)
+
+
+def update_police(dt):
+    global police_x, police_y, police_z, police_heading, police_active, wanted_stars, is_busted, game_state
+    if wanted_stars == 0:
+        police_active = False
+        return
+
+    rad_h = math.radians(car_heading)
+    fx, fz = math.sin(rad_h), -math.cos(rad_h)
+
+    if wanted_stars >= 3:
+        is_busted = True
+        game_state = "GAME_OVER"
+        police_x = car_x + 8.0 * fx
+        police_z = car_z + 8.0 * fz
+        police_heading = (car_heading + 180.0) % 360.0
+        police_active = True
+        return
+
+    if police_active and wanted_stars > 0:
+        target_x = car_x - 12.0 * fx
+        target_z = car_z - 12.0 * fz
+        police_x = lerp(police_x, target_x, 5.0 * dt)
+        police_z = lerp(police_z, target_z, 5.0 * dt)
+        police_heading = car_heading
+
+
 def draw_3d_car(cx, cz, angle):
+    global car_exploded
+
     # 1. Proximity light calculation
     light_factor = get_car_light_factor(light_radius=16.0)
-
+    if ambient_light > 0.7:
+        light_factor = 0.0
     # Lighting Multiplier: Scales color brightness up when under light
     mult = 1.0 + (light_factor * 7)
 
@@ -1154,86 +1524,136 @@ def draw_3d_car(cx, cz, angle):
             min(1.0, g * mult * 0.95),
             min(1.0, b * mult * 0.7)
         )
-
-    # 2. Draw Car setup
     glPushMatrix()
-    glTranslatef(cx, 1.0, cz)
-    glRotatef(angle, 0, 1, 0)
+    glTranslatef(cx, 0.2, cz)
+    glRotatef(-angle, 0, 1, 0)
 
-    # Main Chassis (Base Red)
-    draw_box(0, 0.4, 0, 3.2, 0.9, 6.0, light_color(0.5, 0.05, 0.08))
+    if car_exploded:
+        draw_box(0, 0.5, 0, 3.2, 0.9, 5.2, (0.1, 0.1, 0.1))
+        quad = gluNewQuadric()
+        glColor3f(1.0, 0.3, 0.0)
+        glutSolidSphere(1.8, 10, 10)
+        gluDeleteQuadric(quad)
+        glPopMatrix()
+        return
 
-    # Lower Bumper
-    draw_box(0, 0.15, 0, 3.3, 0.35, 6.2, light_color(0.15, 0.15, 0.15))
 
-    # Roof Pillars & Frame
-    frame_col = light_color(0.1, 0.1, 0.15)
-    draw_box(0, 1.65, -1.3, 2.5, 0.2, 0.2, frame_col)
-    draw_box(-1.25, 1.35, -0.4, 0.15, 0.8, 2.0, frame_col)
-    draw_box(1.25, 1.35, -0.4, 0.15, 0.8, 2.0, frame_col)
-    draw_box(0, 1.65, 1.2, 2.5, 0.2, 0.2, frame_col)
 
-    # Driver & Interior
+    # 1. Main Chassis / Body (Crimson Red)
+    draw_box(0, 0.5, 0, 3.0, 0.8, 5.0, light_color(0.5, 0.05, 0.08))
+
+    # 2. Open Cabin Frame / Pillars (Glass area kept empty so it is transparent)
+    draw_box(0, 1.65, -1.3, 2.2, 0.15, 0.15, light_color(0.1, 0.1, 0.15))
+    draw_box(-1.1, 1.35, -0.3, 0.15, 0.75, 2.0, light_color(0.1, 0.1, 0.15))
+    draw_box(1.1, 1.35, -0.3, 0.15, 0.75, 2.0, light_color(0.1, 0.1, 0.15))
+    draw_box(0, 1.65, 1.0, 2.2, 0.15, 0.15, light_color(0.1, 0.1, 0.15))
+    # 3. 3D Player Character / Driver inside Car (Visible in 3rd person view mode)
     quad = gluNewQuadric()
 
-    # Seat / Torso
+    # Driver Seat & Torso (Blue sports jacket)
     draw_box(-0.55, 1.05, 0.1, 0.7, 0.7, 0.5, light_color(0.2, 0.35, 0.8))
 
-    # Driver Head
-    h_col = light_color(0.95, 0.75, 0.6)
+    # Driver Head (Skin tone)
     glPushMatrix()
     glTranslatef(-0.55, 1.55, 0.1)
-    glColor3f(*h_col)
+    glColor3f(*light_color(0.95, 0.75, 0.6))
     gluSphere(quad, 0.32, 10, 10)
     glPopMatrix()
 
-    # Driver Cap
-    c_col = light_color(0.12, 0.12, 0.15)
+    # Driver Cap / Hair (Dark cap)
     glPushMatrix()
     glTranslatef(-0.55, 1.72, 0.08)
-    glColor3f(*c_col)
+    glColor3f(*light_color(0.12, 0.12, 0.15))
     gluSphere(quad, 0.30, 8, 8)
     glPopMatrix()
 
-    # Steering Wheel
+    # Driver Arms (Skin tone extending forward)
+    draw_box(-0.55, 1.2, -0.35, 0.55, 0.15, 0.5, light_color(0.95, 0.75, 0.6))
+
+    # Interior 3D Steering Wheel
     glPushMatrix()
     glTranslatef(-0.55, 1.25, -0.65)
-    w_col = light_color(0.15, 0.15, 0.18)
-    glColor3f(*w_col)
+    glColor3f(0.15, 0.15, 0.18)
     gluCylinder(quad, 0.3, 0.3, 0.1, 10, 1)
     glPopMatrix()
 
-    # Headlights & Taillights (Constant emissive glow)
-    glColor3f(1.0, 1.0, 0.85)
-    for side in (-1.1, 1.1):
-        glPushMatrix()
-        glTranslatef(side, 0.65, -3.01)
-        glutSolidCube(0.4)
-        glPopMatrix()
+    # 3.5 Mounted 3D Player Gun (rotates to follow mouse aiming direction)
+    glPushMatrix()
+    glTranslatef(0.0, 1.75, -0.4)
+    glRotatef(-gun_angle, 0, 1, 0)
+    glColor3f(*light_color(0.2, 0.2, 0.25))
+    glutSolidCube(0.4)
+    glPushMatrix()
+    glTranslatef(0, 0, -0.6)
+    glColor3f(0.08, 0.08, 0.12)
+    gluCylinder(quad, 0.12, 0.1, 0.8, 10, 1)
+    glPopMatrix()
+    glPopMatrix()
 
-    glColor3f(1.0, 0.05, 0.05)
-    for side in (-1.1, 1.1):
-        glPushMatrix()
-        glTranslatef(side, 0.65, 3.01)
-        glutSolidCube(0.4)
-        glPopMatrix()
+    # 4. Front Headlights & Rear Taillights
+    draw_box(-1.0, 0.6, -2.52, 0.4, 0.3, 0.1, (1.0, 0.9, 0.2))
+    draw_box(1.0, 0.6, -2.52, 0.4, 0.3, 0.1, (1.0, 0.9, 0.2))
+    draw_box(-1.0, 0.6, 2.52, 0.4, 0.3, 0.1, (1.0, 0.1, 0.1))
+    draw_box(1.0, 0.6, 2.52, 0.4, 0.3, 0.1, (1.0, 0.1, 0.1))
 
-    # Wheels
-    wheel_col = light_color(0.12, 0.12, 0.14)
-    rim_col = light_color(0.7, 0.7, 0.75)
-    for wx, wy, wz in [(-1.6, 0.45, -1.8), (1.6, 0.45, -1.8), (-1.6, 0.45, 1.8), (1.6, 0.45, 1.8)]:
+    # 5. Tire Skid Marks during Drift Animation
+    if abs(drift_angle) > 3.0:
+        glDisable(GL_FOG)
+        glEnable(GL_BLEND)
+        glColor4f(0.15, 0.15, 0.15, 0.7)
+        for rx, rz in [(-1.1, 1.2), (1.1, 1.2)]:
+            glBegin(GL_QUADS)
+            glVertex3f(rx - 0.3, 0.03, rz + 1.2)
+            glVertex3f(rx + 0.3, 0.03, rz + 1.2)
+            glVertex3f(rx + 0.3, 0.03, rz - 0.8)
+            glVertex3f(rx - 0.3, 0.03, rz - 0.8)
+            glEnd()
+        glEnable(GL_FOG)
+
+    # 6. Wheels
+    for wx, wy, wz in [(-1.5, 0.4, -1.5), (1.5, 0.4, -1.5), (-1.5, 0.4, 1.5), (1.5, 0.4, 1.5)]:
         glPushMatrix()
         glTranslatef(wx, wy, wz)
         glRotatef(90 if wx > 0 else -90, 0, 1, 0)
-        glColor3f(*wheel_col)
-        gluCylinder(quad, 0.5, 0.5, 0.4, 14, 1)
-        glColor3f(*rim_col)
-        gluSphere(quad, 0.3, 10, 10)
+        glColor3f(*light_color(0.15, 0.15, 0.15))
+        gluCylinder(quad, 0.45, 0.45, 0.35, 10, 1)
         glPopMatrix()
 
     gluDeleteQuadric(quad)
     glPopMatrix()
+
+
+def draw_police_car(cx, cz, angle):
+    glPushMatrix()
+    glTranslatef(cx, 0.2, cz)
+    glRotatef(-angle, 0, 1, 0)
+
+    draw_box(0, 0.5, 0, 3.0, 0.8, 5.0, (0.08, 0.08, 0.08))
+    draw_box(0, 0.52, 0, 3.05, 0.76, 2.2, (0.9, 0.9, 0.9))
+
+    draw_box(0, 1.4, -0.3, 2.2, 0.8, 2.6, (0.08, 0.08, 0.08))
+    draw_box(0, 1.4, -1.6, 2.0, 0.7, 0.1, (0.7, 0.85, 0.95))
+
+    draw_box(-0.4, 1.95, -0.3, 0.5, 0.3, 0.5, (1.0, 0.0, 0.0))
+    draw_box(0.4, 1.95, -0.3, 0.5, 0.3, 0.5, (0.0, 0.2, 1.0))
+
+    draw_3d_text(1.55, 0.5, 0.8, "POLICE", color=(0.1, 0.1, 0.1), scale=0.006, angle=90)
+    draw_3d_text(-1.55, 0.5, -0.8, "POLICE", color=(0.1, 0.1, 0.1), scale=0.006, angle=270)
+
+    quad = gluNewQuadric()
+    for wx, wy, wz in [(-1.5, 0.4, -1.5), (1.5, 0.4, -1.5), (-1.5, 0.4, 1.5), (1.5, 0.4, 1.5)]:
+        glPushMatrix()
+        glTranslatef(wx, wy, wz)
+        glRotatef(90 if wx > 0 else -90, 0, 1, 0)
+        glColor3f(0.15, 0.15, 0.15)
+        gluCylinder(quad, 0.45, 0.45, 0.35, 10, 1)
+        glPopMatrix()
+    gluDeleteQuadric(quad)
+    glPopMatrix()
+
+
 # ---------------- Simulator Car Dashboard Overlay ----------------
+
 
 def draw_dashboard():
     glMatrixMode(GL_PROJECTION)
@@ -1241,16 +1661,18 @@ def draw_dashboard():
     glLoadIdentity()
     gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
 
+
     glMatrixMode(GL_MODELVIEW)
     glPushMatrix()
     glLoadIdentity()
+
 
     glDisable(GL_DEPTH_TEST)
     glDisable(GL_FOG)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    # 1. Main Dashboard Base Housing
+
     dash_h = WINDOW_HEIGHT * 0.38
     glColor4f(0.02, 0.02, 0.02, 0.95)
     glBegin(GL_QUADS)
@@ -1260,7 +1682,7 @@ def draw_dashboard():
     glVertex2f(0, dash_h)
     glEnd()
 
-    # Top Frame Line in Yellow
+
     glColor3f(1.0, 1.0, 0.0)
     glLineWidth(2.0)
     glBegin(GL_LINE_STRIP)
@@ -1270,29 +1692,32 @@ def draw_dashboard():
     glVertex2f(WINDOW_WIDTH, dash_h * 0.7)
     glEnd()
 
+
     cx_speed = WINDOW_WIDTH * 0.28
     cy_speed = WINDOW_HEIGHT * 0.20
     R_speed = min(WINDOW_WIDTH, WINDOW_HEIGHT) * 0.17
+
 
     cx_rpm = WINDOW_WIDTH * 0.72
     cy_rpm = WINDOW_HEIGHT * 0.20
     R_rpm = R_speed
 
-    # 2. SPEEDOMETER DIAL (LEFT)
-    # Solid Black Circle Background with Yellow Outline
+
     draw_hud_circle(cx_speed, cy_speed, R_speed, fill=True, r=0.0, g=0.0, b=0.0, alpha=1.0)
     draw_hud_circle(cx_speed, cy_speed, R_speed, fill=False, r=1.0, g=1.0, b=0.0, alpha=1.0)
 
-    # Speedometer Scale: Exactly 16 numbers starting from 0 to 300 (gap of 20) in YELLOW
+
     for i in range(16):
         val = i * 20
         ang_deg = 225.0 - i * 18.0
         ang_rad = math.radians(ang_deg)
 
+
         tx1 = cx_speed + math.cos(ang_rad) * (R_speed * 0.84)
         ty1 = cy_speed + math.sin(ang_rad) * (R_speed * 0.84)
         tx2 = cx_speed + math.cos(ang_rad) * (R_speed * 0.96)
         ty2 = cy_speed + math.sin(ang_rad) * (R_speed * 0.96)
+
 
         glColor3f(1.0, 1.0, 0.0)
         glLineWidth(2.0)
@@ -1300,6 +1725,7 @@ def draw_dashboard():
         glVertex2f(tx1, ty1)
         glVertex2f(tx2, ty2)
         glEnd()
+
 
         if i < 15:
             ang_mid = math.radians(225.0 - (i + 0.5) * 18.0)
@@ -1314,20 +1740,20 @@ def draw_dashboard():
             glVertex2f(mx2, my2)
             glEnd()
 
+
         text_str = str(val)
         offset_x = 12 if val >= 100 else (8 if val >= 10 else 4)
         nx = cx_speed + math.cos(ang_rad) * (R_speed * 0.68) - offset_x
         ny = cy_speed + math.sin(ang_rad) * (R_speed * 0.68) - 6
-        # YELLOW Colored Numbers
         draw_hud_text(nx, ny, text_str, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
 
-    # Speedometer RED Indicator Pointer Stick
+
     sp_ratio = min(300.0, max(0.0, abs(car_speed))) / 300.0
     needle_ang = math.radians(225.0 - sp_ratio * 270.0)
     nx_sp = cx_speed + math.cos(needle_ang) * (R_speed * 0.88)
     ny_sp = cy_speed + math.sin(needle_ang) * (R_speed * 0.88)
 
-    # Bright RED Pointer Stick
+
     glColor3f(1.0, 0.0, 0.0)
     glLineWidth(4.0)
     glBegin(GL_LINES)
@@ -1335,27 +1761,28 @@ def draw_dashboard():
     glVertex2f(nx_sp, ny_sp)
     glEnd()
 
+
     draw_hud_circle(cx_speed, cy_speed, 8, fill=True, r=0.1, g=0.1, b=0.1)
     draw_hud_circle(cx_speed, cy_speed, 5, fill=True, r=1.0, g=0.0, b=0.0)
 
-    # Parking Indicator (P) in Yellow
+
     draw_hud_text(cx_speed - 10, cy_speed - R_speed * 0.55, "(P)", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
 
 
-    # 3. WORKING TACHOMETER / RPM METER DIAL (RIGHT)
-    # Solid Black Circle Background with Yellow Outline
     draw_hud_circle(cx_rpm, cy_rpm, R_rpm, fill=True, r=0.0, g=0.0, b=0.0, alpha=1.0)
     draw_hud_circle(cx_rpm, cy_rpm, R_rpm, fill=False, r=1.0, g=1.0, b=0.0, alpha=1.0)
 
-    # RPM Scale: 0 to 8 (x1000 RPM) in YELLOW
+
     for i in range(9):
         ang_deg = 210.0 - i * 30.0
         ang_rad = math.radians(ang_deg)
+
 
         tx1 = cx_rpm + math.cos(ang_rad) * (R_rpm * 0.84)
         ty1 = cy_rpm + math.sin(ang_rad) * (R_rpm * 0.84)
         tx2 = cx_rpm + math.cos(ang_rad) * (R_rpm * 0.96)
         ty2 = cy_rpm + math.sin(ang_rad) * (R_rpm * 0.96)
+
 
         glColor3f(1.0, 0.2, 0.0) if i >= 6 else glColor3f(1.0, 1.0, 0.0)
         glLineWidth(2.5 if i >= 6 else 2.0)
@@ -1363,6 +1790,7 @@ def draw_dashboard():
         glVertex2f(tx1, ty1)
         glVertex2f(tx2, ty2)
         glEnd()
+
 
         if i < 8:
             ang_mid = math.radians(210.0 - (i + 0.5) * 30.0)
@@ -1377,18 +1805,18 @@ def draw_dashboard():
             glVertex2f(mx2, my2)
             glEnd()
 
-        # YELLOW Colored Numbers (0 to 8)
+
         nx = cx_rpm + math.cos(ang_rad) * (R_rpm * 0.68) - 5
         ny = cy_rpm + math.sin(ang_rad) * (R_rpm * 0.68) - 6
         draw_hud_text(nx, ny, str(i), font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
 
-    # RPM Working RED Indicator Pointer Stick
+
     rpm_ratio = min(8000.0, max(0.0, current_rpm)) / 8000.0
     needle_ang_rpm = math.radians(210.0 - rpm_ratio * 240.0)
     nx_rpm = cx_rpm + math.cos(needle_ang_rpm) * (R_rpm * 0.88)
     ny_rpm = cy_rpm + math.sin(needle_ang_rpm) * (R_rpm * 0.88)
 
-    # Bright RED Pointer Stick
+
     glColor3f(1.0, 0.0, 0.0)
     glLineWidth(4.0)
     glBegin(GL_LINES)
@@ -1396,16 +1824,17 @@ def draw_dashboard():
     glVertex2f(nx_rpm, ny_rpm)
     glEnd()
 
+
     draw_hud_circle(cx_rpm, cy_rpm, 8, fill=True, r=0.1, g=0.1, b=0.1)
     draw_hud_circle(cx_rpm, cy_rpm, 5, fill=True, r=1.0, g=0.0, b=0.0)
 
-    # Warning Icon (!) in Yellow
+
     draw_hud_text(cx_rpm - 8, cy_rpm - R_rpm * 0.55, "(!)", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
 
 
-    # 4. CENTER DIGITAL DISPLAY & TURN INDICATORS
     cx_mid = WINDOW_WIDTH * 0.5
     cy_mid = cy_speed
+
 
     glColor4f(0.8, 0.8, 0.0, 0.8)
     glLineWidth(2.0)
@@ -1416,28 +1845,33 @@ def draw_dashboard():
     glVertex2f(cx_mid - 80, cy_mid + 70)
     glEnd()
 
+
     left_turn = key_states['a'] or key_states['left']
     right_turn = key_states['d'] or key_states['right']
+
 
     r_l, g_l, b_l = (1.0, 1.0, 0.0) if left_turn else (0.3, 0.3, 0.0)
     r_r, g_r, b_r = (1.0, 1.0, 0.0) if right_turn else (0.3, 0.3, 0.0)
 
+
     draw_hud_text(cx_mid - 65, cy_mid + 45, "<--", font=GLUT_BITMAP_HELVETICA_18, r=r_l, g=g_l, b=b_l)
     draw_hud_text(cx_mid + 40, cy_mid + 45, "-->", font=GLUT_BITMAP_HELVETICA_18, r=r_r, g=g_r, b=b_r)
+
 
     speed_text = f"{int(abs(car_speed))} KM/H"
     gear_text = "D" if car_speed >= 0 else "R"
     odo_text = f"165376"
+
 
     draw_hud_text(cx_mid - 35, cy_mid + 20, speed_text, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
     draw_hud_text(cx_mid - 8, cy_mid - 5, gear_text, font=GLUT_BITMAP_TIMES_ROMAN_24, r=1.0, g=0.0, b=0.0)
     draw_hud_text(cx_mid - 30, cy_mid - 30, odo_text, font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.0)
 
 
-    # 5. AUXILIARY FUEL GAUGE (TEMP GAUGE REMOVED)
     cx_fuel = cx_speed - R_speed * 1.35
     cy_fuel = cy_speed - R_speed * 0.15
     R_sub = R_speed * 0.45
+
 
     draw_hud_circle(cx_fuel, cy_fuel, R_sub, fill=True, r=0.0, g=0.0, b=0.0, alpha=1.0)
     draw_hud_circle(cx_fuel, cy_fuel, R_sub, fill=False, r=1.0, g=1.0, b=0.0, alpha=1.0)
@@ -1450,17 +1884,19 @@ def draw_dashboard():
     glEnd()
 
 
-    # 6. INTERACTIVE STEERING WHEEL
     cx_wheel = WINDOW_WIDTH * 0.5
     cy_wheel = WINDOW_HEIGHT * 0.05
     R_wheel = WINDOW_HEIGHT * 0.12
+
 
     glPushMatrix()
     glTranslatef(cx_wheel, cy_wheel, 0)
     glRotatef(steering_wheel_angle, 0, 0, 1)
 
+
     draw_hud_circle(0, 0, R_wheel, fill=False, r=0.2, g=0.2, b=0.2, alpha=1.0)
     draw_hud_circle(0, 0, R_wheel * 0.9, fill=False, r=0.4, g=0.4, b=0.4, alpha=1.0)
+
 
     glColor3f(0.5, 0.5, 0.5)
     glLineWidth(4.0)
@@ -1470,14 +1906,103 @@ def draw_dashboard():
     glVertex2f(0, 0); glVertex2f(0, -R_wheel * 0.9)
     glEnd()
 
+
     draw_hud_circle(0, 0, R_wheel * 0.3, fill=True, r=0.1, g=0.1, b=0.1)
     draw_hud_circle(0, 0, R_wheel * 0.3, fill=False, r=1.0, g=1.0, b=0.0)
 
+
     glPopMatrix()
+
 
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_FOG)
 
+
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+
+def draw_hud_triangle(x1, y1, x2, y2, x3, y3, fill=True, r=1.0, g=1.0, b=1.0):
+    glColor3f(r, g, b)
+    if fill:
+        glBegin(GL_TRIANGLES)
+        glVertex2f(x1, y1); glVertex2f(x2, y2); glVertex2f(x3, y3)
+        glEnd()
+    else:
+        glLineWidth(2.0)
+        glBegin(GL_LINE_LOOP)
+        glVertex2f(x1, y1); glVertex2f(x2, y2); glVertex2f(x3, y3)
+        glEnd()
+
+
+def draw_star_symbol(cx, cy, size=14, active=True):
+    r, g, b = (1.0, 0.85, 0.1) if active else (0.25, 0.25, 0.25)
+    draw_hud_triangle(cx, cy + size, cx - size*0.4, cy, cx + size*0.4, cy, fill=active, r=r, g=g, b=b)
+    draw_hud_triangle(cx, cy - size, cx - size*0.4, cy, cx + size*0.4, cy, fill=active, r=r, g=g, b=b)
+    draw_hud_triangle(cx - size, cy, cx, cy - size*0.4, cx, cy + size*0.4, fill=active, r=r, g=g, b=b)
+    draw_hud_triangle(cx + size, cy, cx, cy - size*0.4, cx, cy + size*0.4, fill=active, r=r, g=g, b=b)
+
+
+def draw_top_hud():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_FOG)
+    glEnable(GL_BLEND)
+
+    dist_val = total_distance_travelled / 10.0
+    total_score = int(dist_val * 10) + score
+    spd_val = int(abs(car_speed))
+    draw_hud_text(20, WINDOW_HEIGHT - 35, f"SPEED: {spd_val} KM/H", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.5, b=0.1)
+    draw_hud_text(20, WINDOW_HEIGHT - 60, f"DISTANCE: {dist_val:.1f} KM", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=0.2)
+    draw_hud_text(20, WINDOW_HEIGHT - 85, f"SCORE: {total_score}", font=GLUT_BITMAP_HELVETICA_18, r=0.2, g=1.0, b=0.4)
+
+    draw_hud_text(WINDOW_WIDTH - 280, WINDOW_HEIGHT - 30, "CAR HP:", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.3, b=0.3)
+    for i in range(5):
+        tx = WINDOW_WIDTH - 190 + i * 25
+        ty = WINDOW_HEIGHT - 30
+        is_active = (i < car_health)
+        col = (0.1, 0.9, 0.2) if is_active else (0.3, 0.3, 0.3)
+        draw_hud_triangle(tx, ty + 12, tx - 9, ty - 6, tx + 9, ty - 6, fill=is_active, r=col[0], g=col[1], b=col[2])
+
+    draw_hud_text(WINDOW_WIDTH - 280, WINDOW_HEIGHT - 60, "CHAR HP:", font=GLUT_BITMAP_HELVETICA_18, r=0.3, g=0.8, b=1.0)
+    for i in range(5):
+        tx = WINDOW_WIDTH - 190 + i * 25
+        ty = WINDOW_HEIGHT - 60
+        is_active = (i < int(player_health + 0.01))
+        col = (0.2, 0.8, 1.0) if is_active else (0.3, 0.3, 0.3)
+        draw_hud_triangle(tx, ty + 12, tx - 9, ty - 6, tx + 9, ty - 6, fill=is_active, r=col[0], g=col[1], b=col[2])
+
+    draw_hud_text(WINDOW_WIDTH // 2 - 80, WINDOW_HEIGHT - 30, "WANTED:", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=1.0, b=1.0)
+    for i in range(3):
+        sx = WINDOW_WIDTH // 2 + 10 + i * 36
+        sy = WINDOW_HEIGHT - 22
+        draw_star_symbol(sx, sy, size=12, active=(i < wanted_stars))
+
+    ci = round(car_x / CELL_SIZE)
+    cj = round(car_z / CELL_SIZE)
+    dist_to_sig = math.hypot(car_x - ci * CELL_SIZE, car_z - cj * CELL_SIZE)
+    if 15.0 < dist_to_sig < 75.0:
+        if get_traffic_states() == "red":
+            draw_hud_text(WINDOW_WIDTH // 2 - 120, WINDOW_HEIGHT - 90, "WARNING: Red Light Ahead!", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.1, b=0.1)
+
+    if car_health <= 1:
+        draw_hud_text(WINDOW_WIDTH // 2 - 90, WINDOW_HEIGHT - 140, "WARNING: BRAKES FAILED!", font=GLUT_BITMAP_HELVETICA_18, r=1.0, g=0.1, b=0.1)
+
+    if game_state == "GAME_OVER":
+        msg = "BUSTED! YOU ARE ARRESTED!" if is_busted else "CAR DESTROYED! GAME OVER!"
+        draw_hud_text(WINDOW_WIDTH // 2 - 150, WINDOW_HEIGHT // 2, msg, font=GLUT_BITMAP_TIMES_ROMAN_24, r=1.0, g=0.1, b=0.1)
+
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_FOG)
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
@@ -1486,7 +2011,7 @@ def draw_dashboard():
 
 def get_car_light_factor(light_radius=15.0):
     """Calculates brightness factor (0.0 to 1.0) based on distance to nearest street lamp."""
-    global car_x, car_z, ambient_light, street_lamp_radius
+    global  ambient_light, street_lamp_radius
 
     night_factor = max(0.0, 1.0 - (ambient_light - 0.2) / 0.8)
     if night_factor <= 0.01 or not street_lamp_radius:
@@ -1503,6 +2028,7 @@ def get_car_light_factor(light_radius=15.0):
 
     return max_illumination
 
+
 def display():
     global street_lamp_radius
     street_lamp_radius.clear()  # Clear lamp tracking list at start of frame
@@ -1516,32 +2042,23 @@ def display():
 
     if game_state == "PLAYING":
         update_vehicle_physics()
+        update_police(dt)
         update_rain(dt)
+        update_boosts()
+        update_puddles()
+
+    rad_h = math.radians(car_heading)
+    fx, fz = math.sin(rad_h), -math.cos(rad_h)
+    side_x, side_z = math.cos(rad_h), math.sin(rad_h)
 
     if camera_mode == "3rd":
-        # 3rd Person View
-        rad = math.radians(car_angle)
-        forward_x = -math.sin(rad)
-        forward_z = -math.cos(rad)
-
-        cam_x = car_x - forward_x * 16.0
-        cam_z = car_z - forward_z * 16.0
-
-        gluLookAt(cam_x, 6.0, cam_z,
-                  car_x, 1.5, car_z,
+        gluLookAt(car_x - 16.0 * fx, 6.0, car_z - 16.0 * fz,
+                  car_x + 10.0 * fx, 1.5, car_z + 10.0 * fz,
                   0, 1, 0)
     else:
-        # 1st Person Cockpit View (FIXED)
-        rad = math.radians(car_angle)
-        forward_x = -math.sin(rad)
-        forward_z = -math.cos(rad)
-
-        # Look target points 20 units straight out of the car's windshield
-        look_target_x = car_x + forward_x * 20.0
-        look_target_z = car_z + forward_z * 20.0
-
-        gluLookAt(car_x, 2.2, car_z,
-                  look_target_x, 2.0, look_target_z,
+        # 1st Person View: Camera at driver eye position looking forward through open/transparent windshield area
+        gluLookAt(car_x - 0.55 * side_x + 0.1 * fx, 1.65, car_z - 0.55 * side_z + 0.1 * fz,
+                  car_x - 0.55 * side_x + 20.0 * fx, 1.6, car_z - 0.55 * side_z + 20.0 * fz,
                   0, 1, 0)
 
     ci, cj = stream_world(car_x, car_z)
@@ -1550,40 +2067,62 @@ def display():
     draw_footpaths(ci, cj)
     draw_roads(ci, cj)
     draw_world(ci, cj)
+
+    draw_boosts()
+    draw_puddles()
+
+    if police_active and wanted_stars > 0:
+        draw_police_car(police_x, police_z, police_heading)
+
+    if game_state == "PLAYING" or game_state == "GAME_OVER":
+        update_and_draw_enemies(dt)
+        update_and_draw_bullets(dt)
+
     draw_rain()
+    if camera_mode=="3rd":
+        draw_3d_car(car_x, car_z, car_heading + drift_angle)
 
-    # Draw 3D Car Model facing forward (-Z)
-    if camera_mode == "3rd":
-        draw_3d_car(car_x, car_z, car_angle)
-
-
-    # In 1st Person View, render simulator car dashboard overlay
     if camera_mode == "1st":
         draw_dashboard()
+
+    draw_top_hud()
 
     if game_state == "PAUSED":
         draw_pause_overlay()
     glutSwapBuffers()
 
 
-
-# keyboard & special input handlers
-
 def keyboard_down(key, x, y):
-    global key_states, game_state, camera_mode
+    global cheat_mode,key_states, game_state, camera_mode, wanted_stars, police_active, player_bullets
     if key == b'\x1b':  # ESC
         game_state = "PAUSED" if game_state == "PLAYING" else "PLAYING"
         glutPostRedisplay()
         return
 
     if game_state != "PLAYING":
-        return  # ignore movement/other keys while paused
+        return
+    k = key.decode("utf-8").lower()
+    if k == 'c':
+        cheat_mode = not cheat_mode
+
+        if cheat_mode:
+            print("CHEAT MODE: ON")
+            wanted_stars = 0
+            police_active = False
+            player_bullets.clear()
+        else:
+            print("CHEAT MODE: OFF")
+
+        glutPostRedisplay()
+
 
     k = key.decode('utf-8').lower() if isinstance(key, bytes) else key.lower()
     if k == 'v':
         camera_mode = "1st" if camera_mode == "3rd" else "3rd"
         glutPostRedisplay()
         return
+    elif k == ' ':
+        key_states['space'] = True
 
     if k in key_states:
         key_states[k] = True
@@ -1592,6 +2131,8 @@ def keyboard_down(key, x, y):
 def keyboard_up(key, x, y):
     global key_states
     k = key.decode('utf-8').lower() if isinstance(key, bytes) else key.lower()
+    if k == ' ':
+        key_states['space'] = False
     if k in key_states:
         key_states[k] = False
 
@@ -1620,6 +2161,7 @@ def special_up(key, x, y):
         key_states['left'] = False
     elif key == GLUT_KEY_RIGHT:
         key_states['right'] = False
+
 
 def car_collides(test_x, test_z, test_angle):
     # Car dimensions
@@ -1659,7 +2201,7 @@ def car_collides(test_x, test_z, test_angle):
         "trees": 1.2,
         "lamps": 0.6,
         "street_lamps": 0.6,
-        "traffic_lights": 0.8,
+        "traffic_lights": 0.3,
         "road_signs": 0.5
     }
 
@@ -1705,108 +2247,259 @@ def car_collides(test_x, test_z, test_angle):
 
     return False
 
+def cheat_auto_shoot():
+    global player_bullets, last_cheat_shot
+
+    current_time = time.time()
+
+    # Don't shoot too rapidly
+    if current_time - last_cheat_shot < CHEAT_BULLET_COOLDOWN:
+        return
+
+    rad_h = math.radians(car_heading)
+
+    # Direction car is facing
+    forward_x = math.sin(rad_h)
+    forward_z = -math.cos(rad_h)
+
+    best_enemy = None
+    best_distance = float('inf')
+
+    for enemy in enemies:
+
+        dx = enemy['x'] - car_x
+        dz = enemy['z'] - car_z
+
+        distance = math.hypot(dx, dz)
+
+        if distance < 0.01 or distance > CHEAT_VISION_DISTANCE:
+            continue
+
+        # Direction from car to enemy
+        dir_x = dx / distance
+        dir_z = dz / distance
+
+        # Dot product
+        dot = forward_x * dir_x + forward_z * dir_z
+        dot = max(-1.0, min(1.0, dot))
+
+        angle = math.degrees(math.acos(dot))
+
+        # Enemy must actually be in front of us
+        if angle <= CHEAT_VISION_ANGLE:
+
+            # Pick the closest enemy in view
+            if distance < best_distance:
+                best_distance = distance
+                best_enemy = enemy
+
+    # No enemy in view
+    if best_enemy is None:
+        return
+
+    # Aim directly at enemy
+    dx = best_enemy['x'] - car_x
+    dz = best_enemy['z'] - car_z
+    distance = math.hypot(dx, dz)
+
+    if distance < 0.01:
+        return
+
+    dir_x = dx / distance
+    dir_z = dz / distance
+
+    # Create a REAL player bullet
+    player_bullets.append({
+        'x': car_x,
+        'y': 1.5,
+        'z': car_z,
+        'vx': dir_x * 120.0,
+        'vz': dir_z * 120.0
+    })
+
+    last_cheat_shot = current_time
+
+
 
 def update_vehicle_physics():
-    global car_x, car_z, cam_x, cam_z, car_speed, last_frame_time, current_rpm, steering_wheel_angle,car_angle,car_tilt
+    global car_x, car_z, cam_x, cam_z, car_speed, last_frame_time, current_rpm, steering_wheel_angle
+    global uncontrolled_timer, wanted_stars, police_active, passed_red_light_nodes, zone_speed_flag, car_health
+    global target_car_heading, car_heading, last_turn_time, total_distance_travelled, drift_angle
+    global cheat_mode,cheat_speed,cheat_turn_speed
 
     current_time = time.time()
     dt = current_time - last_frame_time
     last_frame_time = current_time
 
-    # Cap delta time to avoid physics jumps
     dt = min(dt, 0.1)
+
+    if cheat_mode:
+        # Never exceed 80
+        car_speed = cheat_speed
+
+        # Automatically drive forward
+        rad_h = math.radians(car_heading)
+
+        forward_x = math.sin(rad_h)
+        forward_z = -math.cos(rad_h)
+
+        world_speed = cheat_speed * 0.25
+
+        car_x += forward_x * world_speed * dt
+        car_z += forward_z * world_speed * dt
+
+        total_distance_travelled += abs(world_speed) * dt
+
+        # Automatically shoot enemies in view
+        cheat_auto_shoot()
+
+        return
 
     throttle = key_states['w'] or key_states['up']
     brake_reverse = key_states['s'] or key_states['down']
     steer_l = key_states['a'] or key_states['left']
     steer_r = key_states['d'] or key_states['right']
+    hard_brake = key_states['space']
 
-    #  Dynamic Rain Surface Physics Scaling
-    if is_raining:
-        effective_accel = acceleration * WET_ACCEL_MULT
-        effective_decel = deceleration * WET_FRICTION_MULT  # Low friction = slides longer
-        effective_turn_rate = 90.0 * WET_STEER_MULT  # Sluggish turning response
-    else:
-        effective_accel = acceleration
-        effective_decel = deceleration
-        effective_turn_rate = 90.0
+    if car_health <= 1:
+        brake_reverse = False
+        hard_brake = False
 
-    # 1. Acceleration & Braking / Reverse
-    if throttle:
-        car_speed += effective_accel * dt
-    elif brake_reverse:
-        car_speed -= effective_accel * dt
-    else:
-        # Coasting deceleration
+    # Check intersection proximity for turning (ONLY at valid intersection grid nodes)
+    inter_i = round(car_x / (INTERSECTION_INTERVAL * CELL_SIZE)) * INTERSECTION_INTERVAL
+    inter_j = round(car_z / (INTERSECTION_INTERVAL * CELL_SIZE)) * INTERSECTION_INTERVAL
+    dist_to_intersection_center = math.hypot(car_x - inter_i * CELL_SIZE, car_z - inter_j * CELL_SIZE)
+    at_intersection = (dist_to_intersection_center < 25.0)
+
+    if at_intersection and (current_time - last_turn_time > 0.4):
+        if steer_l:
+            target_car_heading = (target_car_heading - 90.0) % 360.0
+            last_turn_time = current_time
+        elif steer_r:
+            target_car_heading = (target_car_heading + 90.0) % 360.0
+            last_turn_time = current_time
+
+    diff = (target_car_heading - car_heading + 180.0) % 360.0 - 180.0
+    car_heading += diff * min(1.0, 2.0 * dt)
+
+    rad_h = math.radians(car_heading)
+    # forward_x = math.sin(rad_h)
+    # forward_z = -math.cos(rad_h)
+    side_x = math.cos(rad_h)
+    side_z = math.sin(rad_h)
+
+    if uncontrolled_timer > 0:
+        uncontrolled_timer -= dt
+        car_x += side_x * math.sin(time.time() * 12.0) * 18.0 * dt
+        car_z += side_z * math.sin(time.time() * 12.0) * 18.0 * dt
+        steer_l = False
+        steer_r = False
+
+    # --- Acceleration, Speed-Dependent Dynamic Braking, Reverse & Hard Brake ---
+    speed_ratio = min(1.0, abs(car_speed) / max_speed)
+    brake_power = 135.0 - (speed_ratio * 80.0)         # High speed: gradual braking (~55); Low speed: faster braking (~127)
+    hard_brake_power = 210.0 - (speed_ratio * 100.0)   # High speed: gradual hard brake (~110); Low speed: instant stop (~200)
+
+    if hard_brake:
         if car_speed > 0:
-            car_speed = max(0.0, car_speed - effective_decel * dt)
+            car_speed = max(0.0, car_speed - hard_brake_power * dt)
         elif car_speed < 0:
-            car_speed = min(0.0, car_speed + effective_decel * dt)
+            car_speed = min(0.0, car_speed + hard_brake_power * dt)
+    elif brake_reverse:
+        if car_speed > 0.0:
+            # Moving forward: S / Down Arrow acts as BRAKE until speed reaches 0
+            car_speed = max(0.0, car_speed - brake_power * dt)
+        else:
+            # Speed is 0 or moving backward: S / Down Arrow acts as REVERSE
+            car_speed -= acceleration * dt
+    elif throttle:
+        if car_speed < 0.0:
+            # Moving backward: W / Up Arrow acts as BRAKE until speed reaches 0
+            car_speed = min(0.0, car_speed + brake_power * dt)
+        else:
+            # Accelerate forward
+            car_speed += acceleration * dt
+    else:
+        if car_speed > 0:
+            car_speed = max(0.0, car_speed - deceleration * dt)
+        elif car_speed < 0:
+            car_speed = min(0.0, car_speed + deceleration * dt)
 
-    # Clamp top speeds
     car_speed = max(max_reverse_speed, min(max_speed, car_speed))
 
+    # --- Drift Animation Calculation (ONLY at Intersections) ---
+    if at_intersection and hard_brake and abs(car_speed) > 10.0 and (steer_l or steer_r):
+        target_drift = -22.0 if steer_l else 22.0
+        drift_angle = lerp(drift_angle, target_drift, 12.0 * dt)
+    else:
+        drift_angle = lerp(drift_angle, 0.0, 10.0 * dt)
 
-    # 2. Smooth Arcade Lane Transition (Realistic Car Turning)
+
+
     target_steer = 0.0
-    steer_input = 0.0
 
     if steer_l:
-        steer_input = 1.0
-        target_steer = 1.0
-    elif steer_r:
-        steer_input = -1.0
         target_steer = -1.0
 
-        # Continuously rotate car_angle as long as A or D is held down
-    turn_rate = effective_turn_rate  # Degrees per second (increase for faster turns)
+    if steer_r:
+        target_steer = 1.0
 
-    # Only allow turning if the car is moving (realistic driving feel)
-    if abs(car_speed) > 0.1:
-        # Reverses steering direction when backing up
-        dir_factor = 1.0 if car_speed >= 0 else -1.0
-        car_angle += steer_input * turn_rate * dt * dir_factor
+    # Steering gets weaker at low speed
+    steer_strength = min(1.0, abs(car_speed) / 70.0)
 
-    # Keep angle bound within 0 to 360 degrees
-    car_angle %= 360.0
+    if not at_intersection:
+        car_heading += target_steer * 40.0 * steer_strength * dt
+        target_car_heading = car_heading
 
-
-
-   #controls steering wheels movement
     steering_wheel_angle = lerp(steering_wheel_angle, target_steer * 90.0, 10.0 * dt)
 
 
-    # 3. Forward Movement along car's facing direction (car_angle)
+
+    # --- Vehicle Movement + Collision Detection ---
     world_speed = car_speed * 0.25
-    rad = math.radians(car_angle)
 
-    # Calculate 2D direction vectors based on facing angle
-    forward_x = -math.sin(rad)
-    forward_z = -math.cos(rad)
+    # Recalculate direction AFTER steering
+    rad_h = math.radians(car_heading)
+    forward_x = math.sin(rad_h)
+    forward_z = -math.cos(rad_h)
 
-    # Move along the calculated directional vectors
-    # car_x += forward_x * world_speed * dt
-    # car_z += forward_z * world_speed * dt
     # Calculate desired new position
     new_x = car_x + forward_x * world_speed * dt
     new_z = car_z + forward_z * world_speed * dt
 
     # Collision detection
-    if not car_collides(new_x, new_z, car_angle):
+    if not car_collides(new_x, new_z, car_heading):
         car_x = new_x
         car_z = new_z
+        total_distance_travelled += abs(world_speed) * dt
     else:
-        # Collision: stop the car
-        if car_speed > 0:
-            car_speed = 0.0
+        # Collision: stop forward/reverse movement
+        car_speed = 0.0
 
-    # Keep camera aligned behind the car's dynamic heading
-    cam_x = car_x - forward_x * 16.0
-    cam_z = car_z - forward_z * 16.0
+    ci = round(car_x / CELL_SIZE)
+    cj = round(car_z / CELL_SIZE)
+    sig_node = (ci, cj)
+    dist_to_sig = math.hypot(car_x - ci * CELL_SIZE, car_z - cj * CELL_SIZE)
+    if  dist_to_sig < 10.0 :
+
+        if get_traffic_states() == "red" and sig_node not in passed_red_light_nodes:
+            passed_red_light_nodes.add(sig_node)
+            wanted_stars = min(3, wanted_stars + 1)
+            police_active = True
 
 
+    if is_in_school_or_hospital_zone(car_x, car_z) and abs(car_speed) > 90.0:
+        if not zone_speed_flag:
+            wanted_stars = min(3, wanted_stars + 1)
+            police_active = True
+            zone_speed_flag = True
 
-    # 4. Engine RPM Calculation
+    else:
+        zone_speed_flag = False
+
+    cam_x = car_x - 16.0 * forward_x
+    cam_z = car_z - 16.0 * forward_z
+
     speed_ratio = abs(car_speed) / 300.0
     gear_cycle = (speed_ratio * 4.5) % 1.0
     throttle_boost = 1800.0 if throttle else 0.0
@@ -1821,20 +2514,22 @@ def layout_pause_buttons():
     btn_w, btn_h = 220, 60
     gap = 20
 
+
     resume_y = WINDOW_HEIGHT // 2 - btn_h // 2
     quit_y   = resume_y + btn_h + gap
+
 
     resume_btn = (cx - btn_w // 2, resume_y, cx + btn_w // 2, resume_y + btn_h)
     quit_btn   = (cx - btn_w // 2, quit_y,   cx + btn_w // 2, quit_y + btn_h)
 
+
 def init():
     glEnable(GL_DEPTH_TEST)
 
-#controls raindrops
+
     global raindrops
     raindrops = []
     for _ in range(RAIN_COUNT):
-        # Spawn drops within a box centered around the starting camera
         x = random.uniform(-100, 100)
         y = random.uniform(0, 50)
         z = random.uniform(-100, 100)
@@ -1842,15 +2537,16 @@ def init():
         length = random.uniform(1.2, 2.5)
         raindrops.append([x, y, z, speed, length])
 
-    # Enable Alpha Blending for light glows
+
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    # Distance fog configuration (pushed far to horizon so roads remain solid black)
+
     glEnable(GL_FOG)
     glFogi(GL_FOG_MODE, GL_LINEAR)
     glFogf(GL_FOG_START, 700.0)
     glFogf(GL_FOG_END, 1400.0)
+
 
     stream_world(cam_x, cam_z)
 
@@ -1875,6 +2571,7 @@ def main():
     glutInitWindowPosition(0, 0)
     glutCreateWindow(b"ROAD STRIKE")
 
+
     glEnable(GL_DEPTH_TEST)
     init()
     layout_pause_buttons()
@@ -1885,11 +2582,12 @@ def main():
     glutSpecialFunc(special_down)
     glutSpecialUpFunc(special_up)
     glutMouseFunc(mouse)
+    glutMotionFunc(mouse_motion)
+    glutPassiveMotionFunc(mouse_motion)
     glutTimerFunc(16, update_time, 0)
     glutIdleFunc(glutPostRedisplay)
     glutMainLoop()
 
 
 if __name__ == "__main__":
-
     main()
